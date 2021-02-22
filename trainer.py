@@ -21,8 +21,8 @@ try:
     from apex import amp
     from apex.fp16_utils import *
 except ImportError:
-    print('This is not an error. If you want to use low precision, i.e., fp16, please install the apex with cuda support (https://github.com/NVIDIA/apex) and update pytorch to 1.0')
-
+    #print('This is not an error. If you want to use low precision, i.e., fp16, please install the apex with cuda support (https://github.com/NVIDIA/apex) and update pytorch to 1.0')
+    pass
 
 def to_gray(half=False): #simple
     def forward(x):
@@ -43,7 +43,7 @@ def to_edge(x):
         xx += np.random.randn(xx.shape[0],xx.shape[1])*0.1  #add random noise
         xx = torch.from_numpy(xx.astype(np.float32))
         out[i,:,:] = xx
-    out = out.unsqueeze(1) 
+    out = out.unsqueeze(1)
     return out.cuda()
 
 def scale2(x):
@@ -81,7 +81,7 @@ def predict_label(teacher_models, inputs, num_class, alabel, slabel, teacher_sty
 # teacher_style:
 # 0: Our smooth dynamic label
 # 1: Pseudo label, hard dynamic label
-# 2: Conditional label, hard static label 
+# 2: Conditional label, hard static label
 # 3: LSRO, static smooth label
 # 4: Dynamic Soft Two-label
 # alabel is appearance label
@@ -89,9 +89,9 @@ def predict_label(teacher_models, inputs, num_class, alabel, slabel, teacher_sty
         count = 0
         sm = nn.Softmax(dim=1)
         for teacher_model in teacher_models:
-            _, outputs_t1 = teacher_model(inputs) 
+            _, outputs_t1 = teacher_model(inputs)
             outputs_t1 = sm(outputs_t1.detach())
-            _, outputs_t2 = teacher_model(fliplr(inputs)) 
+            _, outputs_t2 = teacher_model(fliplr(inputs))
             outputs_t2 = sm(outputs_t2.detach())
             if count==0:
                 outputs_t = outputs_t1 + outputs_t2
@@ -162,7 +162,7 @@ def load_network(network, name):
 def load_config(name):
     config_path = os.path.join('./models',name,'opts.yaml')
     with open(config_path, 'r') as stream:
-        config = yaml.load(stream)
+        config = yaml.safe_load(stream)
     return config
 
 
@@ -182,11 +182,11 @@ class DGNet_Trainer(nn.Module):
 
         if not 'ID_stride' in hyperparameters.keys():
             hyperparameters['ID_stride'] = 2
-        
+
         if hyperparameters['ID_style']=='PCB':
             self.id_a = PCB(ID_class)
         elif hyperparameters['ID_style']=='AB':
-            self.id_a = ft_netAB(ID_class, stride = hyperparameters['ID_stride'], norm=hyperparameters['norm_id'], pool=hyperparameters['pool']) 
+            self.id_a = ft_netAB(ID_class, stride = hyperparameters['ID_stride'], norm=hyperparameters['norm_id'], pool=hyperparameters['pool'])
         else:
             self.id_a = ft_net(ID_class, norm=hyperparameters['norm_id'], pool=hyperparameters['pool']) # return 2048 now
 
@@ -204,7 +204,7 @@ class DGNet_Trainer(nn.Module):
             for teacher_name in teacher_names:
                 config_tmp = load_config(teacher_name)
                 if 'stride' in config_tmp:
-                    stride = config_tmp['stride'] 
+                    stride = config_tmp['stride']
                 else:
                     stride = 2
                 model_tmp = ft_net(ID_class, stride = stride)
@@ -288,7 +288,7 @@ class DGNet_Trainer(nn.Module):
 
         #ID Loss
         self.id_criterion = nn.CrossEntropyLoss()
-        self.criterion_teacher = nn.KLDivLoss(size_average=False)
+        self.criterion_teacher = nn.KLDivLoss(reduction="sum")
         # Load VGG model if needed
         if 'vgg_w' in hyperparameters.keys() and hyperparameters['vgg_w'] > 0:
             self.vgg = load_vgg16(hyperparameters['vgg_model_path'] + '/models')
@@ -360,7 +360,7 @@ class DGNet_Trainer(nn.Module):
             _, p_a = self.id_a(x_a_re)
             _, p_b = self.id_b(x_b_re)
             # encode the same ID different photo
-            _, pp_a = self.id_a(xp_a_re) 
+            _, pp_a = self.id_a(xp_a_re)
             _, pp_b = self.id_b(xp_b_re)
 
         return x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p
@@ -369,7 +369,7 @@ class DGNet_Trainer(nn.Module):
         # ppa, ppb is the same person
         self.gen_opt.zero_grad()
         self.id_opt.zero_grad()
- 
+
         # no gradient
         x_ba_copy = Variable(x_ba.data, requires_grad=False)
         x_ab_copy = Variable(x_ab.data, requires_grad=False)
@@ -520,17 +520,17 @@ class DGNet_Trainer(nn.Module):
             self.loss_gen_total.backward()
             self.gen_opt.step()
             self.id_opt.step()
-        print("L_total: %.4f, L_gan: %.4f,  Lx: %.4f, Lxp: %.4f, Lrecycle:%.4f, Lf: %.4f, Ls: %.4f, Recon-id: %.4f, id: %.4f, pid:%.4f, teacher: %.4f"%( self.loss_gen_total, \
-                                                        hyperparameters['gan_w'] * (self.loss_gen_adv_a + self.loss_gen_adv_b), \
-                                                        hyperparameters['recon_x_w'] * (self.loss_gen_recon_x_a + self.loss_gen_recon_x_b), \
-                                                        hyperparameters['recon_xp_w'] * (self.loss_gen_recon_xp_a + self.loss_gen_recon_xp_b), \
-                                                        hyperparameters['recon_x_cyc_w'] * (self.loss_gen_cycrecon_x_a + self.loss_gen_cycrecon_x_b), \
-                                                        hyperparameters['recon_f_w'] * (self.loss_gen_recon_f_a + self.loss_gen_recon_f_b), \
-                                                        hyperparameters['recon_s_w'] * (self.loss_gen_recon_s_a + self.loss_gen_recon_s_b), \
-                                                        hyperparameters['recon_id_w'] * self.loss_gen_recon_id, \
-                                                        hyperparameters['id_w'] * self.loss_id,\
-                                                        hyperparameters['pid_w'] * self.loss_pid,\
-hyperparameters['teacher_w'] * self.loss_teacher )  )
+        #print("L_total: %.4f, L_gan: %.4f,  Lx: %.4f, Lxp: %.4f, Lrecycle:%.4f, Lf: %.4f, Ls: %.4f, Recon-id: %.4f, id: %.4f, pid:%.4f, teacher: %.4f"%( self.loss_gen_total, \
+        #                                                hyperparameters['gan_w'] * (self.loss_gen_adv_a + self.loss_gen_adv_b), \
+        #                                                hyperparameters['recon_x_w'] * (self.loss_gen_recon_x_a + self.loss_gen_recon_x_b), \
+        #                                                hyperparameters['recon_xp_w'] * (self.loss_gen_recon_xp_a + self.loss_gen_recon_xp_b), \
+        #                                                hyperparameters['recon_x_cyc_w'] * (self.loss_gen_cycrecon_x_a + self.loss_gen_cycrecon_x_b), \
+        #                                                hyperparameters['recon_f_w'] * (self.loss_gen_recon_f_a + self.loss_gen_recon_f_b), \
+        #                                                hyperparameters['recon_s_w'] * (self.loss_gen_recon_s_a + self.loss_gen_recon_s_b), \
+        #                                                hyperparameters['recon_id_w'] * self.loss_gen_recon_id, \
+        #                                                hyperparameters['id_w'] * self.loss_id,\
+        #                                                hyperparameters['pid_w'] * self.loss_pid,\
+        #                                                hyperparameters['teacher_w'] * self.loss_teacher )  )
 
     def compute_vgg_loss(self, vgg, img, target):
         img_vgg = vgg_preprocess(img)
@@ -584,7 +584,7 @@ hyperparameters['teacher_w'] * self.loss_teacher )  )
             self.loss_dis_a, reg_a = self.dis_a.calc_dis_loss(self.dis_a, x_ba.detach(), x_a)
             self.loss_dis_b, reg_b = self.dis_b.calc_dis_loss(self.dis_b, x_ab.detach(), x_b)
         self.loss_dis_total = hyperparameters['gan_w'] * self.loss_dis_a + hyperparameters['gan_w'] * self.loss_dis_b
-        print("DLoss: %.4f"%self.loss_dis_total, "Reg: %.4f"%(reg_a+reg_b) )
+        #print("DLoss: %.4f"%self.loss_dis_total, "Reg: %.4f"%(reg_a+reg_b) )
         if self.fp16:
             with amp.scale_loss(self.loss_dis_total, self.dis_opt) as scaled_loss:
                 scaled_loss.backward()
@@ -600,21 +600,42 @@ hyperparameters['teacher_w'] * self.loss_teacher )  )
         if self.id_scheduler is not None:
             self.id_scheduler.step()
 
+    def removeNonLoc(self,dic):
+        nonLocKeys = []
+        for key in dic:
+            if key.find("nonloc") != -1:
+                nonLocKeys.append(key)
+        for key in nonLocKeys:
+            dic.pop(key)
+        return dic
+
     def resume(self, checkpoint_dir, hyperparameters):
         # Load generators
         last_model_name = get_model_list(checkpoint_dir, "gen")
         state_dict = torch.load(last_model_name)
+
+        state_dict['a'] = self.removeNonLoc(state_dict['a'])
         self.gen_a.load_state_dict(state_dict['a'])
+
         self.gen_b = self.gen_a
         iterations = int(last_model_name[-11:-3])
         # Load discriminators
         last_model_name = get_model_list(checkpoint_dir, "dis")
         state_dict = torch.load(last_model_name)
+
+        state_dict['a'] = self.removeNonLoc(state_dict['a'])
         self.dis_a.load_state_dict(state_dict['a'])
         self.dis_b = self.dis_a
         # Load ID dis
         last_model_name = get_model_list(checkpoint_dir, "id")
         state_dict = torch.load(last_model_name)
+        state_dict['a'] = self.removeNonLoc(state_dict['a'])
+
+        for classKey in ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]:
+            if state_dict["a"][classKey].size(1) != self.id_a.state_dict()[classKey].size(1):
+                ratio = self.id_a.state_dict()[classKey].size(1) // state_dict["a"][classKey].size(1)
+                state_dict["a"][classKey] = state_dict["a"][classKey].repeat(1,ratio)/ratio
+
         self.id_a.load_state_dict(state_dict['a'])
         self.id_b = self.id_a
         # Load optimizers
@@ -622,9 +643,11 @@ hyperparameters['teacher_w'] * self.loss_teacher )  )
             state_dict = torch.load(os.path.join(checkpoint_dir, 'optimizer.pt'))
             self.dis_opt.load_state_dict(state_dict['dis'])
             self.gen_opt.load_state_dict(state_dict['gen'])
+
             self.id_opt.load_state_dict(state_dict['id'])
         except:
             pass
+
         # Reinitilize schedulers
         self.dis_scheduler = get_scheduler(self.dis_opt, hyperparameters, iterations)
         self.gen_scheduler = get_scheduler(self.gen_opt, hyperparameters, iterations)
@@ -633,9 +656,10 @@ hyperparameters['teacher_w'] * self.loss_teacher )  )
 
     def save(self, snapshot_dir, iterations, num_gpu=1):
         # Save generators, discriminators, and optimizers
-        gen_name = os.path.join(snapshot_dir, 'gen_%08d.pt' % (iterations + 1))
-        dis_name = os.path.join(snapshot_dir, 'dis_%08d.pt' % (iterations + 1))
-        id_name = os.path.join(snapshot_dir, 'id_%08d.pt' % (iterations + 1))
+        print("Saving at {}".format(iterations))
+        gen_name = os.path.join(snapshot_dir, 'gen_%08d.pt' % (iterations))
+        dis_name = os.path.join(snapshot_dir, 'dis_%08d.pt' % (iterations))
+        id_name = os.path.join(snapshot_dir, 'id_%08d.pt' % (iterations))
         opt_name = os.path.join(snapshot_dir, 'optimizer.pt')
         torch.save({'a': self.gen_a.state_dict()}, gen_name)
         if num_gpu>1:
@@ -644,6 +668,3 @@ hyperparameters['teacher_w'] * self.loss_teacher )  )
             torch.save({'a': self.dis_a.state_dict()}, dis_name)
         torch.save({'a': self.id_a.state_dict()}, id_name)
         torch.save({'gen': self.gen_opt.state_dict(), 'id': self.id_opt.state_dict(),  'dis': self.dis_opt.state_dict()}, opt_name)
-
-
-
