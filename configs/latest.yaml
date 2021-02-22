@@ -12,7 +12,7 @@ beta2: 0.999                     # Adam hyperparameter
 crop_image_height: 256           # Input height
 crop_image_width: 128            # Input width
 data_root: ../Market/pytorch/    # Dataset Root
-dis:              
+dis:
   LAMBDA: 0.01                   # the hyperparameter for the regularization term
   activ: lrelu                   # activation function style [relu/lrelu/prelu/selu/tanh]
   dim: 32                        # number of filters in the bottommost layer
@@ -47,7 +47,7 @@ image_display_iter: 5000         # How often do you want to display output image
 image_save_iter: 5000            # How often do you want to save output images during training
 input_dim_a: 1                   # We use the gray-scale input, so the input dim is 1
 input_dim_b: 1                   # We use the gray-scale input, so the input dim is 1
-log_iter: 1                      # How often do you want to log the training stats
+log_iter: 50                     # How often do you want to log the training stats
 lr2: 0.002                       # initial appearance encoder learning rate
 lr_d: 0.0001                     # initial discriminator learning rate
 lr_g: 0.0001                     # initial generator (except appearance encoder) learning rate
@@ -56,7 +56,7 @@ max_cyc_w: 2                     # the maximum weight for cycle loss
 max_iter: 100000                 # When you end the training
 max_teacher_w: 2                 # the maximum weight for prime loss (teacher KL loss)
 max_w: 1                         # the maximum weight for feature reconstruction losses
-new_size: 128                    # the resized size  
+new_size: 128                    # the resized size
 norm_id: false                   # Do we normalize the appearance code
 num_workers: 8                   # nworks to load the data
 pid_w: 1.0                       # positive ID loss
@@ -68,7 +68,7 @@ recon_x_cyc_w: 0                 # the initial weight for cycle reconstruction
 recon_x_w: 5                     # the initial weight for self-reconstruction
 recon_xp_w: 5                    # the initial weight for self-identity reconstruction
 single: gray                     # make input to gray-scale
-snapshot_save_iter: 10000        # How often to save the checkpoint 
+snapshot_save_iter: 10000        # How often to save the checkpoint
 sqrt: false                      # whether use square loss.
 step_size: 60000                 # when to decay the learning rate
 teacher: best                    # teacher model name. For DukeMTMC, you may set `best-duke`
