@@ -72,7 +72,7 @@ def get_all_data_loaders(conf):
 def get_data_loader_list(root, file_list, batch_size, train, new_size=None,
                            height=256, width=128, num_workers=4, crop=True):
     transform_list = [transforms.ToTensor(),
-                      transforms.Normalize((0.485, 0.456, 0.406),  
+                      transforms.Normalize((0.485, 0.456, 0.406),
                                            (0.229, 0.224, 0.225))]
     transform_list = [transforms.RandomCrop((height, width))] + transform_list if crop else transform_list
     transform_list = [transforms.Pad(10, padding_mode='edge')] + transform_list if train else transform_list
@@ -100,7 +100,7 @@ def get_data_loader_folder(input_folder, batch_size, train, new_size=None,
 
 def get_config(config):
     with open(config, 'r') as stream:
-        return yaml.load(stream)
+        return yaml.safe_load(stream)
 
 
 def eformat(f, prec):
@@ -256,7 +256,7 @@ def get_scheduler(optimizer, hyperparameters, iterations=-1):
         scheduler = lr_scheduler.StepLR(optimizer, step_size=hyperparameters['step_size'],
                                         gamma=hyperparameters['gamma'], last_epoch=iterations)
     elif hyperparameters['lr_policy'] == 'multistep':
-        #50000 -- 75000 -- 
+        #50000 -- 75000 --
         step = hyperparameters['step_size']
         scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[step, step+step//2, step+step//2+step//4],
                                         gamma=hyperparameters['gamma'], last_epoch=iterations)
@@ -298,5 +298,3 @@ class Timer:
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         print(self.msg % (time.time() - self.start_time))
-
-

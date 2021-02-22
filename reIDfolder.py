@@ -15,7 +15,6 @@ class ReIDFolder(datasets.ImageFolder):
         targets = np.asarray([s[1] for s in self.samples])
         self.targets = targets
         self.img_num = len(self.samples)
-        print(self.img_num)
 
     def _get_cam_id(self, path):
         camera_id = []
@@ -54,4 +53,3 @@ class ReIDFolder(datasets.ImageFolder):
             target = self.target_transform(target)
 
         return sample, target, pos
-
