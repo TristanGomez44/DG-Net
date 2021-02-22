@@ -37,7 +37,7 @@ class ClassBlock(nn.Module):
     def __init__(self, input_dim, class_num, droprate=0.5, relu=False, num_bottleneck=512):
         super(ClassBlock, self).__init__()
         add_block = []
-        add_block += [nn.Linear(input_dim, num_bottleneck)] 
+        add_block += [nn.Linear(input_dim, num_bottleneck)]
         #num_bottleneck = input_dim # We remove the input_dim
         add_block += [nn.BatchNorm1d(num_bottleneck, affine=True)]
         if relu:
@@ -72,17 +72,17 @@ class ft_net(nn.Module):
         # avg pooling to global pooling
         self.part = 4
         if pool=='max':
-            model_ft.partpool = nn.AdaptiveMaxPool2d((self.part,1)) 
+            model_ft.partpool = nn.AdaptiveMaxPool2d((self.part,1))
             model_ft.avgpool = nn.AdaptiveMaxPool2d((1,1))
         else:
-            model_ft.partpool = nn.AdaptiveAvgPool2d((self.part,1)) 
+            model_ft.partpool = nn.AdaptiveAvgPool2d((self.part,1))
             model_ft.avgpool = nn.AdaptiveAvgPool2d((1,1))
         # remove the final downsample
         if stride == 1:
             model_ft.layer4[0].downsample[0].stride = (1,1)
             model_ft.layer4[0].conv2.stride = (1,1)
 
-        self.model = model_ft   
+        self.model = model_ft
         self.classifier = ClassBlock(2048, class_num)
 
     def forward(self, x):
@@ -96,7 +96,7 @@ class ft_net(nn.Module):
         x = self.model.layer4(x)
         f = self.model.partpool(x) # 8 * 2048 4*1
         x = self.model.avgpool(x)  # 8 * 2048 1*1
-        
+
         x = x.view(x.size(0),x.size(1))
         f = f.view(f.size(0),f.size(1)*self.part)
         if self.norm:
@@ -108,7 +108,7 @@ class ft_net(nn.Module):
 # Define the AB Model
 class ft_netAB(nn.Module):
 
-    def __init__(self, class_num, norm=False, stride=2, droprate=0.5, pool='avg'):
+    def __init__(self, class_num, norm=False, stride=2, droprate=0.5, pool='avg',repVec=True):
         super(ft_netAB, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         self.part = 4
@@ -125,8 +125,14 @@ class ft_netAB(nn.Module):
             self.model.layer4[0].downsample[0].stride = (1,1)
             self.model.layer4[0].conv2.stride = (1,1)
 
-        self.classifier1 = ClassBlock(2048, class_num, 0.5)
-        self.classifier2 = ClassBlock(2048, class_num, 0.75)
+        self.repVec = repVec
+
+        if not repVec:
+            self.classifier1 = ClassBlock(2048, class_num, 0.5)
+            self.classifier2 = ClassBlock(2048, class_num, 0.75)
+        else:
+            self.classifier1 = ClassBlock(2048*3, class_num, 0.5)
+            self.classifier2 = ClassBlock(2048*3, class_num, 0.75)
 
     def forward(self, x):
         x = self.model.conv1(x)
@@ -138,16 +144,49 @@ class ft_netAB(nn.Module):
         x = self.model.layer3(x)
         x = self.model.layer4(x)
         f = self.model.partpool(x)
+
         f = f.view(f.size(0),f.size(1)*self.part)
-        f = f.detach() # no gradient 
-        x = self.model.avgpool(x)
+        f = f.detach() # no gradient
+
+        if not self.repVec:
+            x = self.model.avgpool(x)
+        else:
+            x,_ = representativeVectors(x,3)
+            x = torch.cat(x,dim=1)
+
         x = x.view(x.size(0), x.size(1))
-        x1 = self.classifier1(x) 
-        x2 = self.classifier2(x)  
+        x1 = self.classifier1(x)
+        x2 = self.classifier2(x)
         x=[]
         x.append(x1)
         x.append(x2)
         return f, x
+
+def representativeVectors(x,nbVec):
+
+    xOrigShape = x.size()
+
+    x = x.permute(0,2,3,1).reshape(x.size(0),x.size(2)*x.size(3),x.size(1))
+    norm = torch.sqrt(torch.pow(x,2).sum(dim=-1)) + 0.00001
+
+    raw_reprVec_score = norm.clone()
+
+    repreVecList = []
+    simList = []
+    for _ in range(nbVec):
+        _,ind = raw_reprVec_score.max(dim=1,keepdim=True)
+        raw_reprVec_norm = norm[torch.arange(x.size(0)).unsqueeze(1),ind]
+        raw_reprVec = x[torch.arange(x.size(0)).unsqueeze(1),ind]
+        sim = (x*raw_reprVec).sum(dim=-1)/(norm*raw_reprVec_norm)
+        simNorm = sim/sim.sum(dim=1,keepdim=True)
+        reprVec = (x*simNorm.unsqueeze(-1)).sum(dim=1)
+        repreVecList.append(reprVec)
+        raw_reprVec_score = (1-sim)*raw_reprVec_score
+        simReshaped = simNorm.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
+        simList.append(simReshaped)
+
+    return repreVecList,simList
+
 
 # Define the DenseNet121-based Model
 class ft_net_dense(nn.Module):
@@ -158,7 +197,7 @@ class ft_net_dense(nn.Module):
         model_ft.features.avgpool = nn.AdaptiveAvgPool2d((1,1))
         model_ft.fc = nn.Sequential()
         self.model = model_ft
-        # For DenseNet, the feature dim is 1024 
+        # For DenseNet, the feature dim is 1024
         self.classifier = ClassBlock(1024, class_num)
 
     def forward(self, x):
@@ -166,7 +205,7 @@ class ft_net_dense(nn.Module):
         x = torch.squeeze(x)
         x = self.classifier(x)
         return x
-    
+
 # Define the ResNet50-based Model (Middle-Concat)
 # In the spirit of "The Devil is in the Middle: Exploiting Mid-level Representations for Cross-Domain Instance Matching." Yu, Qian, et al. arXiv:1711.08106 (2017).
 class ft_net_middle(nn.Module):
@@ -221,7 +260,7 @@ class PCB(nn.Module):
         x = self.model.bn1(x)
         x = self.model.relu(x)
         x = self.model.maxpool(x)
-        
+
         x = self.model.layer1(x)
         x = self.model.layer2(x)
         x = self.model.layer3(x)
@@ -272,5 +311,3 @@ class PCB_test(nn.Module):
         x = self.avgpool(x)
         y = x.view(x.size(0),x.size(1),x.size(2))
         return y
-
-
