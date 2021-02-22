@@ -70,7 +70,7 @@ if opt.PCB:
     data_transforms = transforms.Compose([
         transforms.Resize((384,192), interpolation=3),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) 
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
 
@@ -88,6 +88,12 @@ use_gpu = torch.cuda.is_available()
 def load_network(network):
     save_path = os.path.join('../outputs',name,'checkpoints/id_%08d.pt'%opt.which_epoch)
     state_dict = torch.load(save_path)
+
+    for classKey in ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]:
+        if state_dict["a"][classKey].size(1) != network.state_dict()[classKey].size(1):
+            ratio = network.state_dict()[classKey].size(1) // state_dict["a"][classKey].size(1)
+            state_dict["a"][classKey] = state_dict["a"][classKey].repeat(1,ratio)/ratio
+
     network.load_state_dict(state_dict['a'], strict=False)
     return network
 
@@ -127,7 +133,7 @@ def extract_feature(model,dataloaders):
             if(i==1):
                 img = fliplr(img)
             input_img = Variable(img.cuda())
-            f, x = model(input_img) 
+            f, x = model(input_img)
             x[0] = norm(x[0])
             x[1] = norm(x[1])
             f = torch.cat((x[0],x[1]), dim=1) #use 512-dim feature
@@ -142,7 +148,7 @@ def extract_feature(model,dataloaders):
             # feature size (n,2048,6)
             # 1. To treat every part equally, I calculate the norm for every 2048-dim part feature.
             # 2. To keep the cosine score==1, sqrt(6) is added to norm the whole feature (2048*6).
-            fnorm = torch.norm(ff, p=2, dim=1, keepdim=True) * np.sqrt(6) 
+            fnorm = torch.norm(ff, p=2, dim=1, keepdim=True) * np.sqrt(6)
             ff = ff.div(fnorm.expand_as(ff))
             ff = ff.view(ff.size(0), -1)
 
@@ -208,7 +214,7 @@ with torch.no_grad():
         time_elapsed // 60, time_elapsed % 60))
     if opt.multi:
         mquery_feature = extract_feature(model,dataloaders['multi-query'])
-    
+
 # Save to Matlab for check
 result = {'gallery_f':gallery_feature.numpy(),'gallery_label':gallery_label,'gallery_cam':gallery_cam,'query_f':query_feature.numpy(),'query_label':query_label,'query_cam':query_cam}
 scipy.io.savemat('pytorch_result.mat',result)

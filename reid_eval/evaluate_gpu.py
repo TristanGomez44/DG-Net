@@ -31,7 +31,7 @@ def evaluate(qf,ql,qc,gf,gl,gc):
     junk_index1 = np.argwhere(gl==-1)
     junk_index2 = np.intersect1d(query_index, camera_index)
     junk_index = np.append(junk_index2, junk_index1) #.flatten())
-    
+
     CMC_tmp = compute_mAP(index, qc, good_index, junk_index)
     return CMC_tmp
 
@@ -55,7 +55,7 @@ def compute_mAP(index, qc, good_index, junk_index):
     mask = np.in1d(index, good_index)
     rows_good = np.argwhere(mask==True)
     rows_good = rows_good.flatten()
-    
+
     cmc[rows_good[0]:] = 1
     for i in range(ngood):
         d_recall = 1.0/ngood
@@ -89,10 +89,11 @@ if multi:
 query_feature = query_feature.cuda()
 gallery_feature = gallery_feature.cuda()
 
-print(query_feature.shape)
+csv = "alpha,metric,value\n"
+
 alpha = [0, 0.5, -1]
 for j in range(len(alpha)):
-    CMC = torch.IntTensor(len(gallery_label)).zero_()    
+    CMC = torch.IntTensor(len(gallery_label)).zero_()
     ap = 0.0
     for i in range(len(query_label)):
         qf = query_feature[i].clone()
@@ -109,6 +110,10 @@ for j in range(len(alpha)):
     CMC = CMC.float()
     CMC = CMC/len(query_label) #average CMC
     print('Alpha:%.2f Rank@1:%.4f Rank@5:%.4f Rank@10:%.4f mAP:%.4f'%(alpha[j], CMC[0],CMC[4],CMC[9],ap/len(query_label)))
+    csv += "{},rank1,{}\n".format(alpha[j],CMC[0])
+    csv += "{},rank5,{}\n".format(alpha[j],CMC[4])
+    csv += "{},rank10,{}\n".format(alpha[j],CMC[9])
+    csv += "{},mAP,{}\n".format(alpha[j],ap/len(query_label))
 
 # multiple-query
 CMC = torch.IntTensor(len(gallery_label)).zero_()
@@ -129,3 +134,11 @@ if multi:
     CMC = CMC.float()
     CMC = CMC/len(query_label) #average CMC
     print('multi Rank@1:%.4f Rank@5:%.4f Rank@10:%.4f mAP:%.4f'%(CMC[0],CMC[4],CMC[9],ap/len(query_label)))
+
+    csv += "multi,rank1,{}\n".format(CMC[0])
+    csv += "multi,rank5,{}\n".format(CMC[4])
+    csv += "multi,rank10,{}\n".format(CMC[9])
+    csv += "multi,mAP,{}".format(ap/len(query_label))
+
+with open("eval.csv","w") as file:
+    print(csv,file=file)
