@@ -17,6 +17,7 @@ import yaml
 import numpy as np
 import torch.nn.init as init
 import time
+import sqlite3
 # Methods
 # get_all_data_loaders      : primary data loader interface (load trainA, testA, trainB, testB)
 # get_data_loader_list      : list-based data loader
@@ -35,6 +36,27 @@ import time
 # vgg_preprocess
 # get_scheduler
 # weights_init
+
+def getBestTrial(exp_id,model_id,trialNb=None):
+    con = sqlite3.connect("../results/{}/{}_hypSearch.db".format(exp_id,model_id))
+    curr = con.cursor()
+
+    curr.execute('SELECT trial_id,value FROM trials WHERE study_id == 1')
+    query_res = curr.fetchall()
+
+    query_res = list(filter(lambda x:not x[1] is None,query_res))
+
+    trialIds = [id_value[0] for id_value in query_res]
+    values = [id_value[1] for id_value in query_res]
+
+    if not trialNb is None:
+        trialIds = trialIds[:trialNb]
+        values = values[:trialNb]
+
+    bestTrial = trialIds[np.array(values).argmax()]
+
+    return bestTrial
+
 
 def get_all_data_loaders(conf):
     batch_size = conf['batch_size']
