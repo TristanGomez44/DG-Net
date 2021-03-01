@@ -22,7 +22,7 @@ import os
 import scipy.io
 import yaml
 from reIDmodel import ft_net, ft_netAB, ft_net_dense, PCB, PCB_test
-
+import glob
 ######################################################################
 # Options
 # --------
@@ -31,10 +31,15 @@ parser.add_argument('--gpu_ids',default='0', type=str,help='gpu_ids: e.g. 0  0,1
 parser.add_argument('--which_epoch',default=90000, type=int, help='80000')
 parser.add_argument('--test_dir',default='../../Market/pytorch',type=str, help='./test_data')
 parser.add_argument('--name', default='test', type=str, help='save model path')
+parser.add_argument('--config', type=str)
 parser.add_argument('--batchsize', default=80, type=int, help='batchsize')
 parser.add_argument('--use_dense', action='store_true', help='use densenet121' )
 parser.add_argument('--PCB', action='store_true', help='use PCB' )
 parser.add_argument('--multi', action='store_true', help='use multiple query' )
+parser.add_argument('--att_maps', action='store_true', help='to save att maps')
+parser.add_argument('--exp_id', type=str)
+parser.add_argument('--model_id', type=str)
+parser.add_argument('--which_trial',type=int)
 
 opt = parser.parse_args()
 
@@ -66,6 +71,10 @@ data_transforms = transforms.Compose([
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
+data_transforms_nonorm = transforms.Compose([
+        transforms.Resize((256,128), interpolation=3),
+        transforms.ToTensor()])
+
 if opt.PCB:
     data_transforms = transforms.Compose([
         transforms.Resize((384,192), interpolation=3),
@@ -77,7 +86,10 @@ if opt.PCB:
 data_dir = test_dir
 image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery','query','multi-query']}
 dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
+                                             shuffle=False, num_workers=0) for x in ['gallery','query','multi-query']}
+
+image_dataset_nonorm = datasets.ImageFolder(os.path.join(data_dir,'gallery') ,data_transforms_nonorm)
+dataloader_nonorm = torch.utils.data.DataLoader(image_dataset_nonorm, batch_size=opt.batchsize,shuffle=False, num_workers=0)
 
 class_names = image_datasets['query'].classes
 use_gpu = torch.cuda.is_available()
@@ -85,8 +97,9 @@ use_gpu = torch.cuda.is_available()
 ######################################################################
 # Load model
 #---------------------------
-def load_network(network):
-    save_path = os.path.join('../outputs',name,'checkpoints/id_%08d.pt'%opt.which_epoch)
+def load_network(network,save_path=None):
+    if save_path is None:
+        save_path = os.path.join('../outputs',name,'checkpoints/id_%08d.pt'%opt.which_epoch)
     state_dict = torch.load(save_path)
 
     for classKey in ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]:
@@ -116,10 +129,13 @@ def norm(f):
     f = f.div(fnorm.expand_as(f))
     return f
 
-def extract_feature(model,dataloaders):
+def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None):
     features = torch.FloatTensor()
     count = 0
-    for data in dataloaders:
+    dataloader_nonorm = iter(dataloader_nonorm) if not dataloader_nonorm is None else dataloader_nonorm
+    ids = get_id(image_datasets['gallery'].imgs)[1]
+
+    for batch_idx,data in enumerate(dataloaders):
         img, label = data
         n, c, h, w = img.size()
         count += n
@@ -133,7 +149,33 @@ def extract_feature(model,dataloaders):
             if(i==1):
                 img = fliplr(img)
             input_img = Variable(img.cuda())
-            f, x = model(input_img)
+
+            ret = model(input_img,retSim=opt.att_maps)
+            f, x = ret[:2]
+
+            if opt.att_maps and writeMaps:
+                simMaps,featNorm = ret[2],ret[3]
+                if i == 0:
+                    img_unorm,_ = dataloader_nonorm.next()
+
+                if batch_idx%50 == 0 and i ==0:
+                    #img_unorm,_ = dataloader_nonorm.next()
+
+                    _,inds = torch.tensor(ids[batch_idx*n:(batch_idx+1)*n]).sort()
+
+                    ids_batch = ids[batch_idx*n:(batch_idx+1)*n]
+
+                    simMaps = simMaps[inds]
+                    featNorm = featNorm[inds]
+                    img_unorm = img_unorm[inds]
+
+                    torch.save(simMaps,"../../results/{}/simMaps{}.pt".format(opt.exp_id,batch_idx))
+                    torch.save(featNorm,"../../results/{}/norm{}.pt".format(opt.exp_id,batch_idx))
+                    torch.save(img_unorm,"../../results/{}/img{}.pt".format(opt.exp_id,batch_idx))
+                    torch.save(ids_batch,"../../results/{}/ids{}.pt".format(opt.exp_id,batch_idx))
+
+                    #sys.exit(0)
+
             x[0] = norm(x[0])
             x[1] = norm(x[1])
             f = torch.cat((x[0],x[1]), dim=1) #use 512-dim feature
@@ -184,15 +226,22 @@ print('-------test-----------')
 
 ###load config###
 config_path = os.path.join('../outputs',name,'config.yaml')
-with open(config_path, 'r') as stream:
+with open("../"+opt.config, 'r') as stream:
     config = yaml.load(stream)
 
-model_structure = ft_netAB(config['ID_class'], norm=config['norm_id'], stride=config['ID_stride'], pool=config['pool'])
+part_nb = config["part_nb"] if "part_nb" in config else 3
+
+model_structure = ft_netAB(config['ID_class'], norm=config['norm_id'], stride=config['ID_stride'], pool=config['pool'],\
+                                highRes=config["high_res"],nbVec=part_nb)
 
 if opt.PCB:
     model_structure = PCB(config['ID_class'])
 
-model = load_network(model_structure)
+if opt.att_maps:
+    save_path = glob.glob("../../models/{}/id_[0-9]*{}model{}_trial{}_best.pt".format(opt.exp_id,opt.which_epoch,opt.model_id,opt.which_trial))[0]
+else:
+    save_path = None
+model = load_network(model_structure,save_path)
 
 # Remove the final fc layer and classifier layer
 model.model.fc = nn.Sequential()
@@ -207,7 +256,7 @@ if use_gpu:
 # Extract feature
 since = time.time()
 with torch.no_grad():
-    gallery_feature = extract_feature(model,dataloaders['gallery'])
+    gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm)
     query_feature = extract_feature(model,dataloaders['query'])
     time_elapsed = time.time() - since
     print('Extract features complete in {:.0f}m {:.0f}s'.format(
