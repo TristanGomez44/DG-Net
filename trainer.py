@@ -15,6 +15,7 @@ import numpy as np
 from random_erasing import RandomErasing
 import random
 import yaml
+import glob
 
 #fp16
 try:
@@ -85,71 +86,72 @@ def predict_label(teacher_models, inputs, num_class, alabel, slabel, teacher_sty
 # 3: LSRO, static smooth label
 # 4: Dynamic Soft Two-label
 # alabel is appearance label
-    if teacher_style == 0:
-        count = 0
-        sm = nn.Softmax(dim=1)
-        for teacher_model in teacher_models:
-            _, outputs_t1 = teacher_model(inputs)
-            outputs_t1 = sm(outputs_t1.detach())
-            _, outputs_t2 = teacher_model(fliplr(inputs))
-            outputs_t2 = sm(outputs_t2.detach())
-            if count==0:
-                outputs_t = outputs_t1 + outputs_t2
-            else:
-                outputs_t = outputs_t * opt.alpha  # old model decay
-                outputs_t += outputs_t1 + outputs_t2
-            count +=2
-    elif teacher_style == 1:  # dynamic one-hot  label
-        count = 0
-        sm = nn.Softmax(dim=1)
-        for teacher_model in teacher_models:
-            _, outputs_t1 = teacher_model(inputs)
-            outputs_t1 = sm(outputs_t1.detach())  # change softmax to max
-            _, outputs_t2 = teacher_model(fliplr(inputs))
-            outputs_t2 = sm(outputs_t2.detach())
-            if count==0:
-                outputs_t = outputs_t1 + outputs_t2
-            else:
-                outputs_t = outputs_t * opt.alpha  # old model decay
-                outputs_t += outputs_t1 + outputs_t2
-            count +=2
-        _, dlabel = torch.max(outputs_t.data, 1)
-        outputs_t = torch.zeros(inputs.size(0), num_class).cuda()
-        for i in range(inputs.size(0)):
-            outputs_t[i, dlabel[i]] = 1
-    elif teacher_style == 2: # appearance label
-        outputs_t = torch.zeros(inputs.size(0), num_class).cuda()
-        for i in range(inputs.size(0)):
-            outputs_t[i, alabel[i]] = 1
-    elif teacher_style == 3: # LSRO
-        outputs_t = torch.ones(inputs.size(0), num_class).cuda()
-    elif teacher_style == 4: #Two-label
-        count = 0
-        sm = nn.Softmax(dim=1)
-        for teacher_model in teacher_models:
-            _, outputs_t1 = teacher_model(inputs)
-            outputs_t1 = sm(outputs_t1.detach())
-            _, outputs_t2 = teacher_model(fliplr(inputs))
-            outputs_t2 = sm(outputs_t2.detach())
-            if count==0:
-                outputs_t = outputs_t1 + outputs_t2
-            else:
-                outputs_t = outputs_t * opt.alpha  # old model decay
-                outputs_t += outputs_t1 + outputs_t2
-            count +=2
-        mask = torch.zeros(outputs_t.shape)
-        mask = mask.cuda()
-        for i in range(inputs.size(0)):
-            mask[i, alabel[i]] = 1
-            mask[i, slabel[i]] = 1
-        outputs_t = outputs_t*mask
-    else:
-        print('not valid style. teacher-style is in [0-3].')
+    with torch.no_grad():
+        if teacher_style == 0:
+            count = 0
+            sm = nn.Softmax(dim=1)
+            for teacher_model in teacher_models:
+                _, outputs_t1 = teacher_model(inputs)
+                outputs_t1 = sm(outputs_t1.detach())
+                _, outputs_t2 = teacher_model(fliplr(inputs))
+                outputs_t2 = sm(outputs_t2.detach())
+                if count==0:
+                    outputs_t = outputs_t1 + outputs_t2
+                else:
+                    outputs_t = outputs_t * opt.alpha  # old model decay
+                    outputs_t += outputs_t1 + outputs_t2
+                count +=2
+        elif teacher_style == 1:  # dynamic one-hot  label
+            count = 0
+            sm = nn.Softmax(dim=1)
+            for teacher_model in teacher_models:
+                _, outputs_t1 = teacher_model(inputs)
+                outputs_t1 = sm(outputs_t1.detach())  # change softmax to max
+                _, outputs_t2 = teacher_model(fliplr(inputs))
+                outputs_t2 = sm(outputs_t2.detach())
+                if count==0:
+                    outputs_t = outputs_t1 + outputs_t2
+                else:
+                    outputs_t = outputs_t * opt.alpha  # old model decay
+                    outputs_t += outputs_t1 + outputs_t2
+                count +=2
+            _, dlabel = torch.max(outputs_t.data, 1)
+            outputs_t = torch.zeros(inputs.size(0), num_class).cuda()
+            for i in range(inputs.size(0)):
+                outputs_t[i, dlabel[i]] = 1
+        elif teacher_style == 2: # appearance label
+            outputs_t = torch.zeros(inputs.size(0), num_class).cuda()
+            for i in range(inputs.size(0)):
+                outputs_t[i, alabel[i]] = 1
+        elif teacher_style == 3: # LSRO
+            outputs_t = torch.ones(inputs.size(0), num_class).cuda()
+        elif teacher_style == 4: #Two-label
+            count = 0
+            sm = nn.Softmax(dim=1)
+            for teacher_model in teacher_models:
+                _, outputs_t1 = teacher_model(inputs)
+                outputs_t1 = sm(outputs_t1.detach())
+                _, outputs_t2 = teacher_model(fliplr(inputs))
+                outputs_t2 = sm(outputs_t2.detach())
+                if count==0:
+                    outputs_t = outputs_t1 + outputs_t2
+                else:
+                    outputs_t = outputs_t * opt.alpha  # old model decay
+                    outputs_t += outputs_t1 + outputs_t2
+                count +=2
+            mask = torch.zeros(outputs_t.shape)
+            mask = mask.cuda()
+            for i in range(inputs.size(0)):
+                mask[i, alabel[i]] = 1
+                mask[i, slabel[i]] = 1
+            outputs_t = outputs_t*mask
+        else:
+            print('not valid style. teacher-style is in [0-3].')
 
-    s = torch.sum(outputs_t, dim=1, keepdim=True)
-    s = s.expand_as(outputs_t)
-    outputs_t = outputs_t/s
-    return outputs_t
+        s = torch.sum(outputs_t, dim=1, keepdim=True)
+        s = s.expand_as(outputs_t)
+        outputs_t = outputs_t/s
+        return outputs_t
 
 ######################################################################
 # Load model
@@ -186,7 +188,8 @@ class DGNet_Trainer(nn.Module):
         if hyperparameters['ID_style']=='PCB':
             self.id_a = PCB(ID_class)
         elif hyperparameters['ID_style']=='AB':
-            self.id_a = ft_netAB(ID_class, stride = hyperparameters['ID_stride'], norm=hyperparameters['norm_id'], pool=hyperparameters['pool'])
+            self.id_a = ft_netAB(ID_class, stride = hyperparameters['ID_stride'], norm=hyperparameters['norm_id'], \
+                                    pool=hyperparameters['pool'],nbVec=hyperparameters["part_nb"],highRes=hyperparameters["high_res"])
         else:
             self.id_a = ft_net(ID_class, norm=hyperparameters['norm_id'], pool=hyperparameters['pool']) # return 2048 now
 
@@ -207,8 +210,18 @@ class DGNet_Trainer(nn.Module):
                     stride = config_tmp['stride']
                 else:
                     stride = 2
-                model_tmp = ft_net(ID_class, stride = stride)
-                teacher_model_tmp = load_network(model_tmp, teacher_name)
+                if hyperparameters["distill"]:
+                    teacher_model_tmp = ft_netAB(ID_class, stride = hyperparameters['ID_stride'],norm=hyperparameters['norm_id'], \
+                                                    pool=hyperparameters['pool'],nbVec=hyperparameters["part_nb_teacher"],teach=True)
+
+                    teachPaths = glob.glob("../models/{}/id_*model{}_trial{}_best.pt".format(hyperparameters["exp_id"],hyperparameters["distill"],hyperparameters["bestTrialTeach"]))
+                    teachPaths = sorted(teachPaths,key=lambda x:int(os.path.basename(x).split("_")[1].split("model")[0]))
+                    teachPath = teachPaths[-1]
+
+                    teacher_model_tmp.load_state_dict(torch.load(teachPath)["a"])
+                else:
+                    model_tmp = ft_net(ID_class, stride = stride)
+                    teacher_model_tmp = load_network(model_tmp, teacher_name)
                 teacher_model_tmp.model.fc = nn.Sequential()  # remove the original fc layer in ImageNet
                 teacher_model_tmp = teacher_model_tmp.cuda()
                 if self.fp16:
@@ -520,17 +533,6 @@ class DGNet_Trainer(nn.Module):
             self.loss_gen_total.backward()
             self.gen_opt.step()
             self.id_opt.step()
-        #print("L_total: %.4f, L_gan: %.4f,  Lx: %.4f, Lxp: %.4f, Lrecycle:%.4f, Lf: %.4f, Ls: %.4f, Recon-id: %.4f, id: %.4f, pid:%.4f, teacher: %.4f"%( self.loss_gen_total, \
-        #                                                hyperparameters['gan_w'] * (self.loss_gen_adv_a + self.loss_gen_adv_b), \
-        #                                                hyperparameters['recon_x_w'] * (self.loss_gen_recon_x_a + self.loss_gen_recon_x_b), \
-        #                                                hyperparameters['recon_xp_w'] * (self.loss_gen_recon_xp_a + self.loss_gen_recon_xp_b), \
-        #                                                hyperparameters['recon_x_cyc_w'] * (self.loss_gen_cycrecon_x_a + self.loss_gen_cycrecon_x_b), \
-        #                                                hyperparameters['recon_f_w'] * (self.loss_gen_recon_f_a + self.loss_gen_recon_f_b), \
-        #                                                hyperparameters['recon_s_w'] * (self.loss_gen_recon_s_a + self.loss_gen_recon_s_b), \
-        #                                                hyperparameters['recon_id_w'] * self.loss_gen_recon_id, \
-        #                                                hyperparameters['id_w'] * self.loss_id,\
-        #                                                hyperparameters['pid_w'] * self.loss_pid,\
-        #                                                hyperparameters['teacher_w'] * self.loss_teacher )  )
 
     def compute_vgg_loss(self, vgg, img, target):
         img_vgg = vgg_preprocess(img)
