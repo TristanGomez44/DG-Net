@@ -108,7 +108,7 @@ class ft_net(nn.Module):
 # Define the AB Model
 class ft_netAB(nn.Module):
 
-    def __init__(self, class_num, norm=False, stride=2, droprate=0.5, pool='avg',repVec=True):
+    def __init__(self, class_num, norm=False, stride=2, droprate=0.5, pool='avg',repVec=True,nbVec=3,highRes=False,teach=False):
         super(ft_netAB, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         self.part = 4
@@ -121,20 +121,39 @@ class ft_netAB(nn.Module):
 
         self.model = model_ft
 
-        if stride == 1:
+        if highRes:
+            #self.model.layer2[0].downsample[0].stride = (1,1)
+            #self.model.layer2[0].conv2.stride = (1,1)
+            #self.model.layer2[0].downsample[0].dilation = (2,2)
+            #self.model.layer2[0].conv2.dilation = (2,2)
+
+            self.model.layer3[0].downsample[0].stride = (1,1)
+            self.model.layer3[0].conv2.stride = (1,1)
+            #self.model.layer3[0].downsample[0].dilation = (2,2)
+            #self.model.layer3[0].conv2.dilation = (2,2)
+
+            self.model.layer4[0].downsample[0].stride = (1,1)
+            self.model.layer4[0].conv2.stride = (1,1)
+            #self.model.layer4[0].downsample[0].dilation = (2,2)
+            #self.model.layer4[0].conv2.dilation = (2,2)
+        elif stride == 1:
             self.model.layer4[0].downsample[0].stride = (1,1)
             self.model.layer4[0].conv2.stride = (1,1)
 
         self.repVec = repVec
+        self.nbVec = nbVec
 
         if not repVec:
             self.classifier1 = ClassBlock(2048, class_num, 0.5)
             self.classifier2 = ClassBlock(2048, class_num, 0.75)
         else:
-            self.classifier1 = ClassBlock(2048*3, class_num, 0.5)
-            self.classifier2 = ClassBlock(2048*3, class_num, 0.75)
+            print("nbVec",nbVec)
+            self.classifier1 = ClassBlock(2048*nbVec, class_num, 0.5)
+            self.classifier2 = ClassBlock(2048*nbVec, class_num, 0.75)
 
-    def forward(self, x):
+        self.teach = teach
+
+    def forward(self, x,retSim=False):
         x = self.model.conv1(x)
         x = self.model.bn1(x)
         x = self.model.relu(x)
@@ -151,7 +170,10 @@ class ft_netAB(nn.Module):
         if not self.repVec:
             x = self.model.avgpool(x)
         else:
-            x,_ = representativeVectors(x,3)
+
+            if retSim:
+                norm = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
+            x,simMaps = representativeVectors(x,self.nbVec)
             x = torch.cat(x,dim=1)
 
         x = x.view(x.size(0), x.size(1))
@@ -160,7 +182,14 @@ class ft_netAB(nn.Module):
         x=[]
         x.append(x1)
         x.append(x2)
-        return f, x
+
+        if self.teach:
+            return f,x[0]
+        else:
+            if not retSim:
+                return f, x
+            else:
+                return f,x,simMaps,norm
 
 def representativeVectors(x,nbVec):
 
@@ -185,6 +214,7 @@ def representativeVectors(x,nbVec):
         simReshaped = simNorm.reshape(sim.size(0),1,xOrigShape[2],xOrigShape[3])
         simList.append(simReshaped)
 
+    simList = torch.cat(simList,dim=1)
     return repreVecList,simList
 
 
