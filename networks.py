@@ -59,7 +59,7 @@ class MsImageDis(nn.Module):
         if self.non_local>1:
             cnn_x += [NonlocalBlock(dim)]
         for i in range(self.n_res):
-            cnn_x += [ResBlock(dim, norm=self.norm, activation=self.activ, pad_type=self.pad_type, res_type='basic')] 
+            cnn_x += [ResBlock(dim, norm=self.norm, activation=self.activ, pad_type=self.pad_type, res_type='basic')]
         if self.non_local>0:
             cnn_x += [NonlocalBlock(dim)]
         cnn_x += [nn.Conv2d(dim, 1, 1, 1, 0)]
@@ -82,8 +82,10 @@ class MsImageDis(nn.Module):
         if not self.gan_type == 'wgan':
             outputs = []
             for model in self.cnns:
-                outputs.append(model(x))
+                out = model(x)
+                outputs.append(out)
                 x = self.downsample(x)
+
         else:
              outputs = self.cnn(x)
              outputs = torch.squeeze(outputs)
@@ -107,9 +109,9 @@ class MsImageDis(nn.Module):
             #alpha = alpha.cuda()
             #differences = input_fake - input_real
             #interpolates =  Variable(input_real + (alpha*differences), requires_grad=True)
-            #dis_interpolates = self.forward(interpolates) 
+            #dis_interpolates = self.forward(interpolates)
             #gradient_penalty = self.compute_grad2(dis_interpolates, interpolates).mean()
-            #reg += LAMBDA*gradient_penalty 
+            #reg += LAMBDA*gradient_penalty
             reg += LAMBDA* self.compute_grad2(outs1, input_real).mean() # I suggest Lambda=0.1 for wgan
             loss = loss + reg
             return loss, reg
@@ -188,7 +190,7 @@ class AdaINGen(nn.Module):
         self.enc_content = ContentEncoder(n_downsample, n_res, input_dim, dim, 'in', activ, pad_type=pad_type, dropout=dropout, tanh=tanh, res_type='basic')
 
         self.output_dim = self.enc_content.output_dim
-        if which_dec =='basic':        
+        if which_dec =='basic':
             self.dec = Decoder(n_downsample, n_res, self.output_dim, 3, dropout=dropout, res_norm='adain', activ=activ, pad_type=pad_type, res_type='basic', non_local = non_local, fp16 = fp16)
         elif which_dec =='slim':
             self.dec = Decoder(n_downsample, n_res, self.output_dim, 3, dropout=dropout, res_norm='adain', activ=activ, pad_type=pad_type, res_type='slim', non_local = non_local, fp16 = fp16)
@@ -204,7 +206,7 @@ class AdaINGen(nn.Module):
         self.mlp_w2 = MLP(id_dim, 2*self.output_dim, mlp_dim, 3, norm=mlp_norm, activ=activ)
         self.mlp_w3 = MLP(id_dim, 2*self.output_dim, mlp_dim, 3, norm=mlp_norm, activ=activ)
         self.mlp_w4 = MLP(id_dim, 2*self.output_dim, mlp_dim, 3, norm=mlp_norm, activ=activ)
-        
+
         self.mlp_b1 = MLP(id_dim, 2*self.output_dim, mlp_dim, 3, norm=mlp_norm, activ=activ)
         self.mlp_b2 = MLP(id_dim, 2*self.output_dim, mlp_dim, 3, norm=mlp_norm, activ=activ)
         self.mlp_b3 = MLP(id_dim, 2*self.output_dim, mlp_dim, 3, norm=mlp_norm, activ=activ)
@@ -293,7 +295,7 @@ class StyleEncoder(nn.Module):
     def __init__(self, n_downsample, input_dim, dim, style_dim, norm, activ, pad_type):
         super(StyleEncoder, self).__init__()
         self.model = []
-        # Here I change the stride to 2. 
+        # Here I change the stride to 2.
         self.model += [Conv2dBlock(input_dim, dim, 3, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
         self.model += [Conv2dBlock(dim, dim, 3, 1, 1, norm=norm, activation=activ, pad_type=pad_type)]
         for i in range(2):
@@ -341,7 +343,7 @@ class ContentEncoder_ImageNet(nn.Module):
         self.model = models.resnet50(pretrained=True)
         # remove the final downsample
         self.model.layer4[0].downsample[0].stride = (1,1)
-        self.model.layer4[0].conv2.stride = (1,1) 
+        self.model.layer4[0].conv2.stride = (1,1)
         # (256,128) ----> (16,8)
 
     def forward(self, x):
@@ -464,7 +466,7 @@ class NonlocalBlock(nn.Module):
     def __init__(self, in_dim, norm='in'):
         super(NonlocalBlock, self).__init__()
         self.chanel_in = in_dim
-        
+
         self.query_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
         self.key_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
         self.value_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
@@ -476,19 +478,19 @@ class NonlocalBlock(nn.Module):
             inputs :
                 x : input feature maps( B X C X W X H)
             returns :
-                out : self attention value + input feature 
+                out : self attention value + input feature
                 attention: B X N X N (N is Width*Height)
         """
         m_batchsize,C,width ,height = x.size()
         proj_query  = self.query_conv(x).view(m_batchsize,-1,width*height).permute(0,2,1) # B X CX(N)
         proj_key =  self.key_conv(x).view(m_batchsize,-1,width*height) # B X C x (*W*H)
         energy =  torch.bmm(proj_query, proj_key) # transpose check
-        attention = self.softmax(energy) # BX (N) X (N) 
+        attention = self.softmax(energy) # BX (N) X (N)
         proj_value = self.value_conv(x).view(m_batchsize,-1,width*height) # B X C X N
 
         out = torch.bmm(proj_value,attention.permute(0,2,1) )
         out = out.view(m_batchsize,C,width,height)
-        
+
         out = self.gamma*out + x
         return out
 
@@ -514,7 +516,7 @@ class ASPP(nn.Module):
         self.conv18 += [Conv2dBlock(dim_part,dim_part, 3, 1, 9, norm=norm, activation='none', pad_type=pad_type, dilation=9)]
         self.conv18 = nn.Sequential(*self.conv18)
 
-        self.fuse = Conv2dBlock(4*dim_part,2*dim, 1, 1, 0, norm=norm, activation='none', pad_type=pad_type) 
+        self.fuse = Conv2dBlock(4*dim_part,2*dim, 1, 1, 0, norm=norm, activation='none', pad_type=pad_type)
 
     def forward(self, x):
         conv1 = self.conv1(x)
@@ -860,5 +862,3 @@ class LayerNorm(nn.Module):
             shape = [1, -1] + [1] * (x.dim() - 2)
             x = x * self.gamma.view(*shape) + self.beta.view(*shape)
         return x
-
-
