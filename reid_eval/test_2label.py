@@ -158,7 +158,7 @@ def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None):
                 if i == 0:
                     img_unorm,_ = dataloader_nonorm.next()
 
-                if batch_idx%50 == 0 and i ==0:
+                if batch_idx%5 == 0 and i ==0:
                     #img_unorm,_ = dataloader_nonorm.next()
 
                     _,inds = torch.tensor(ids[batch_idx*n:(batch_idx+1)*n]).sort()
