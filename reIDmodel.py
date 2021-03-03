@@ -122,20 +122,15 @@ class ft_netAB(nn.Module):
         self.model = model_ft
 
         if highRes:
-            #self.model.layer2[0].downsample[0].stride = (1,1)
-            #self.model.layer2[0].conv2.stride = (1,1)
-            #self.model.layer2[0].downsample[0].dilation = (2,2)
-            #self.model.layer2[0].conv2.dilation = (2,2)
+            self.model.layer2[0].downsample[0].stride = (1,1)
+            self.model.layer2[0].conv2.stride = (1,1)
 
             self.model.layer3[0].downsample[0].stride = (1,1)
             self.model.layer3[0].conv2.stride = (1,1)
-            #self.model.layer3[0].downsample[0].dilation = (2,2)
-            #self.model.layer3[0].conv2.dilation = (2,2)
 
             self.model.layer4[0].downsample[0].stride = (1,1)
             self.model.layer4[0].conv2.stride = (1,1)
-            #self.model.layer4[0].downsample[0].dilation = (2,2)
-            #self.model.layer4[0].conv2.dilation = (2,2)
+
         elif stride == 1:
             self.model.layer4[0].downsample[0].stride = (1,1)
             self.model.layer4[0].conv2.stride = (1,1)
@@ -170,7 +165,6 @@ class ft_netAB(nn.Module):
         if not self.repVec:
             x = self.model.avgpool(x)
         else:
-
             if retSim:
                 norm = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
             x,simMaps = representativeVectors(x,self.nbVec)
