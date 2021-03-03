@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
     # Setup model and data loader
     if opts.trainer == 'DGNet':
-        trainer = DGNet_Trainer(config, gpu_ids)
+        trainer = DGNet_Trainer(config)
         trainer.cuda()
 
     random.seed(7) #fix random result
@@ -84,9 +84,9 @@ if __name__ == "__main__":
     nepoch = 0
 
     if num_gpu>1:
-        trainer.dis_a = torch.nn.DataParallel(trainer.dis_a, gpu_ids)
+        trainer.dis_a = torch.nn.DataParallel(trainer.dis_a)
         trainer.dis_b = trainer.dis_a
-        trainer = torch.nn.DataParallel(trainer, gpu_ids)
+        trainer = torch.nn.DataParallel(trainer)
 
     while iterations < max_iter:
         for it, ((images_a,labels_a, pos_a),  (images_b, labels_b, pos_b)) in enumerate(zip(train_loader_a, train_loader_b)):
@@ -100,7 +100,7 @@ if __name__ == "__main__":
 
             # Main training code
             x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p = \
-                                                                                  trainer.forward(images_a, images_b, pos_a, pos_b)
+                                                                                  trainer(images_a, images_b, pos_a, pos_b)
             if num_gpu>1:
                 trainer.module.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu)
                 trainer.module.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu)
