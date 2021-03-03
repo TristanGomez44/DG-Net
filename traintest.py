@@ -14,16 +14,22 @@ import sys
 
 def run(config,trial):
 
-    config["lr2"] = trial.suggest_float("lr2",0.0001,0.0041,step=0.001)
-    config["lr_d"] = trial.suggest_float("lr_d",0.00001,0.00021,step=0.00005)
-    config["lr_g"] = trial.suggest_float("lr_g",0.00001,0.00021,step=0.00005)
-    config["batch_size"] = trial.suggest_int("batch_size",3,config["max_batch_size"],log=True)
-    config["weight_decay"] = trial.suggest_float("weight_decay",0.0001,0.001,step=0.0001)
+    config["lr2"] = trial.suggest_float("lr2",0.0001,0.0061,step=0.001)
+    config["lr_d"] = trial.suggest_float("lr_d",0.00001,0.00041,step=0.00005)
+    config["lr_g"] = trial.suggest_float("lr_g",0.00001,0.00041,step=0.00005)
+    config["batch_size"] = trial.suggest_int("batch_size",1,config["max_batch_size"],log=True)
+    config["weight_decay"] = trial.suggest_float("weight_decay",0.0001,0.002,step=0.0001)
     config["erasing_p"] = trial.suggest_float("erasing_p",0.4,0.6,step=0.1)
     config["gan_w"] = trial.suggest_float("gan_w",0.8,1.2,step=0.2)
     config["id_w"] = trial.suggest_float("id_w",0.8,1.2,step=0.2)
     config["pid_w"] = trial.suggest_float("pid_w",0.8,1.2,step=0.2)
+    config["recon_id_w"] = trial.suggest_float("recon_id_w",0.1,1.0,step=0.1)
+    config["recon_x_w"] = trial.suggest_float("recon_x_w",1,10,step=1)
+    config["recon_xp_w"] = trial.suggest_float("recon_xp_w",1,10,step=1)
+    config["teacher_w"] = trial.suggest_float("recon_id_w",0,1.5,step=0.25)
+    
     epochLen = trial.suggest_int("epochLen",1017,2217,step=100)
+
 
     if not config["distill"]:
         config["part_nb"]= trial.suggest_int("part_nb",3,15,step=2)
@@ -35,7 +41,7 @@ def run(config,trial):
         if not "part_nb" in teachConf:
             config["part_nb_teacher"] = 3
         else:
-            config["part_nb_teacher"] = ["part_nb"]
+            config["part_nb_teacher"] = teachConf["part_nb"]
 
         config["bestTrialTeach"] = bestTrial
 
@@ -108,11 +114,11 @@ if __name__ == "__main__":
     parser.add_argument('--name', type=str, default='latest_ablation', help="outputs path")
     parser.add_argument('--gpu_ids',default='0', type=str,help='gpu_ids: e.g. 0  0,1,2  0,2')
     parser.add_argument('--model_id', type=str, default='default', help="model id")
-    parser.add_argument('--exp_id', type=str, default='default', help="exp id")
-    parser.add_argument('--max_batch_size', type=int, default=9)
-    parser.add_argument('--optuna_trial_nb', type=int, default=25)
+    parser.add_argument('--exp_id', type=str, default='market', help="exp id")
+    parser.add_argument('--max_batch_size', type=int, default=8)
+    parser.add_argument('--optuna_trial_nb', type=int, default=50)
     parser.add_argument('--epochs', type=int, default=4)
-    parser.add_argument('--distill', type=str,help="path to model to distill")
+    parser.add_argument('--distill', type=str,help="model_id of the model to distill")
     parser.add_argument('--part_nb', type=int,help="Number of attention maps",default=3)
 
     opts = parser.parse_args()
