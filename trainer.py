@@ -167,6 +167,35 @@ def load_config(name):
         config = yaml.safe_load(stream)
     return config
 
+class Updater(nn.Module):
+    def __init__(self,trainer,freeze_gen_dis,num_gpu):
+        super(Updater,self).__init__()
+        self.trainer = trainer
+        self.freeze_gen_dis = freeze_gen_dis
+        self.num_gpu = num_gpu
+
+    def forward(self,x_ab, x_ba, images_a, images_b, config,\
+                    s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p,\
+                    x_b_recon_p, pos_a, pos_b, labels_a, labels_b, iterations):
+
+        if self.num_gpu>1:
+            if not self.freeze_gen_dis:
+                self.trainer.module.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, self.num_gpu)
+            self.trainer.module.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, self.num_gpu)
+        else:
+            if not self.freeze_gen_dis:
+                self.trainer.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu=1)
+            self.trainer.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu=1)
+
+class DataParallelModel(nn.DataParallel):
+    def __init__(self, model):
+        super(DataParallelModel, self).__init__(model)
+
+    def __getattr__(self, name):
+        try:
+            return super(DataParallelModel, self).__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
 
 class DGNet_Trainer(nn.Module):
     def __init__(self, hyperparameters, gpu_ids=[0]):
@@ -176,10 +205,15 @@ class DGNet_Trainer(nn.Module):
         ID_class = hyperparameters['ID_class']
         if not 'apex' in hyperparameters.keys():
             hyperparameters['apex'] = False
+
+        self.freeze_gen_dis = hyperparameters["freeze_gen_dis"]
+
         self.fp16 = hyperparameters['apex']
         # Initiate the networks
         # We do not need to manually set fp16 in the network for the new apex. So here I set fp16=False.
         self.gen_a = AdaINGen(hyperparameters['input_dim_a'], hyperparameters['gen'], fp16 = False)  # auto-encoder for domain a
+        self.gen_a = DataParallelModel(self.gen_a) if len(gpu_ids) > 1 else self.gen_a
+
         self.gen_b = self.gen_a  # auto-encoder for domain b
 
         if not 'ID_stride' in hyperparameters.keys():
@@ -189,12 +223,16 @@ class DGNet_Trainer(nn.Module):
             self.id_a = PCB(ID_class)
         elif hyperparameters['ID_style']=='AB':
             self.id_a = ft_netAB(ID_class, stride = hyperparameters['ID_stride'], norm=hyperparameters['norm_id'], \
-                                    pool=hyperparameters['pool'],nbVec=hyperparameters["part_nb"],highRes=hyperparameters["high_res"])
+                                    pool=hyperparameters['pool'],nbVec=hyperparameters["part_nb"],highRes=hyperparameters["high_res"],\
+                                    dilation=hyperparameters["dilation"])
         else:
             self.id_a = ft_net(ID_class, norm=hyperparameters['norm_id'], pool=hyperparameters['pool']) # return 2048 now
+        self.id_a = DataParallelModel(self.id_a) if len(gpu_ids) > 1 else self.id_a
 
         self.id_b = self.id_a
         self.dis_a = MsImageDis(3, hyperparameters['dis'], fp16 = False)  # discriminator for domain a
+        self.dis_a = DataParallelModel(self.dis_a) if len(gpu_ids) > 1 else self.dis_a
+
         self.dis_b = self.dis_a # discriminator for domain b
 
         # load teachers
@@ -205,21 +243,25 @@ class DGNet_Trainer(nn.Module):
             teacher_model = nn.ModuleList()
             teacher_count = 0
             for teacher_name in teacher_names:
-                config_tmp = load_config(teacher_name)
-                if 'stride' in config_tmp:
-                    stride = config_tmp['stride']
-                else:
-                    stride = 2
                 if hyperparameters["distill"]:
                     teacher_model_tmp = ft_netAB(ID_class, stride = hyperparameters['ID_stride'],norm=hyperparameters['norm_id'], \
                                                     pool=hyperparameters['pool'],nbVec=hyperparameters["part_nb_teacher"],teach=True)
 
-                    teachPaths = glob.glob("../models/{}/id_*model{}_trial{}_best.pt".format(hyperparameters["exp_id"],hyperparameters["distill"],hyperparameters["bestTrialTeach"]))
+
+                    teachPaths = glob.glob("../models/{}/id_*model{}_trial{}_best.pt".format(hyperparameters["exp_id"],hyperparameters["distill"],hyperparameters["bestTrialTeach"]-1))
+                    print("../models/{}/id_*model{}_trial{}_best.pt".format(hyperparameters["exp_id"],hyperparameters["distill"],hyperparameters["bestTrialTeach"]-1))
                     teachPaths = sorted(teachPaths,key=lambda x:int(os.path.basename(x).split("_")[1].split("model")[0]))
                     teachPath = teachPaths[-1]
 
                     teacher_model_tmp.load_state_dict(torch.load(teachPath)["a"])
                 else:
+
+                    config_tmp = load_config(teacher_name)
+                    if 'stride' in config_tmp:
+                        stride = config_tmp['stride']
+                    else:
+                        stride = 2
+
                     model_tmp = ft_net(ID_class, stride = stride)
                     teacher_model_tmp = load_network(model_tmp, teacher_name)
                 teacher_model_tmp.model.fc = nn.Sequential()  # remove the original fc layer in ImageNet
@@ -302,6 +344,7 @@ class DGNet_Trainer(nn.Module):
         #ID Loss
         self.id_criterion = nn.CrossEntropyLoss()
         self.criterion_teacher = nn.KLDivLoss(reduction="sum")
+
         # Load VGG model if needed
         if 'vgg_w' in hyperparameters.keys() and hyperparameters['vgg_w'] > 0:
             self.vgg = load_vgg16(hyperparameters['vgg_model_path'] + '/models')
@@ -349,20 +392,45 @@ class DGNet_Trainer(nn.Module):
         cos_dis = 1 - cos(input, target)
         return torch.mean(cos_dis[:])
 
-    def forward(self, x_a, x_b, xp_a, xp_b):
-        s_a = self.gen_a.encode(self.single(x_a))
-        s_b = self.gen_b.encode(self.single(x_b))
+    def forward(self, x_a, x_b, xp_a, xp_b,labels_a, labels_b,iterations,config,num_gpu):
+        if self.freeze_gen_dis:
+            self.gen_a.eval()
+            self.gen_b.eval()
+
+        if self.freeze_gen_dis:
+            with torch.no_grad():
+                s_a = self.gen_a.encode(self.single(x_a))
+                s_b = self.gen_b.encode(self.single(x_b))
+        else:
+            s_a = self.gen_a.encode(self.single(x_a))
+            s_b = self.gen_b.encode(self.single(x_b))
+
         f_a, p_a = self.id_a(scale2(x_a))
         f_b, p_b = self.id_b(scale2(x_b))
-        x_ba = self.gen_a.decode(s_b, f_a)
-        x_ab = self.gen_b.decode(s_a, f_b)
-        x_a_recon = self.gen_a.decode(s_a, f_a)
-        x_b_recon = self.gen_b.decode(s_b, f_b)
+
+        if self.freeze_gen_dis:
+            with torch.no_grad():
+                x_ba = self.gen_a.decode(s_b, f_a)
+                x_ab = self.gen_b.decode(s_a, f_b)
+                x_a_recon = self.gen_a.decode(s_a, f_a)
+                x_b_recon = self.gen_b.decode(s_b, f_b)
+        else:
+            x_ba = self.gen_a.decode(s_b, f_a)
+            x_ab = self.gen_b.decode(s_a, f_b)
+            x_a_recon = self.gen_a.decode(s_a, f_a)
+            x_b_recon = self.gen_b.decode(s_b, f_b)
+
         fp_a, pp_a = self.id_a(scale2(xp_a))
         fp_b, pp_b = self.id_b(scale2(xp_b))
+
         # decode the same person
-        x_a_recon_p = self.gen_a.decode(s_a, fp_a)
-        x_b_recon_p = self.gen_b.decode(s_b, fp_b)
+        if self.freeze_gen_dis:
+            with torch.no_grad():
+                x_a_recon_p = self.gen_a.decode(s_a, fp_a)
+                x_b_recon_p = self.gen_b.decode(s_b, fp_b)
+        else:
+            x_a_recon_p = self.gen_a.decode(s_a, fp_a)
+            x_b_recon_p = self.gen_b.decode(s_b, fp_b)
 
         # Random Erasing only effect the ID and PID loss.
         if self.erasing_p > 0:
@@ -376,11 +444,23 @@ class DGNet_Trainer(nn.Module):
             _, pp_a = self.id_a(xp_a_re)
             _, pp_b = self.id_b(xp_b_re)
 
+        images_a,images_b = x_a, x_b
+        pos_a,pos_b = xp_a, xp_b
+        #if num_gpu>1:
+        #    if not self.freeze_gen_dis:
+        #        self.module.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu)
+        #    self.module.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu)
+        #else:
+        if not self.freeze_gen_dis:
+            self.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu=1)
+        self.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu=1)
+
         return x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p
 
     def gen_update(self, x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, x_a, x_b, xp_a, xp_b, l_a, l_b, hyperparameters, iteration, num_gpu):
         # ppa, ppb is the same person
-        self.gen_opt.zero_grad()
+        if not self.freeze_gen_dis:
+            self.gen_opt.zero_grad()
         self.id_opt.zero_grad()
 
         # no gradient
@@ -484,12 +564,13 @@ class DGNet_Trainer(nn.Module):
         self.loss_gen_cycrecon_x_a = self.recon_criterion(x_aba, x_a) if hyperparameters['recon_x_cyc_w'] > 0 else 0
         self.loss_gen_cycrecon_x_b = self.recon_criterion(x_bab, x_b) if hyperparameters['recon_x_cyc_w'] > 0 else 0
         # GAN loss
-        if num_gpu>1:
-            self.loss_gen_adv_a = self.dis_a.module.calc_gen_loss(self.dis_a, x_ba)
-            self.loss_gen_adv_b = self.dis_b.module.calc_gen_loss(self.dis_b, x_ab)
-        else:
-            self.loss_gen_adv_a = self.dis_a.calc_gen_loss(self.dis_a, x_ba)
-            self.loss_gen_adv_b = self.dis_b.calc_gen_loss(self.dis_b, x_ab)
+        #if num_gpu>1:
+        #    self.loss_gen_adv_a = self.dis_a.module.calc_gen_loss(self.dis_a, x_ba)
+        #    self.loss_gen_adv_b = self.dis_b.module.calc_gen_loss(self.dis_b, x_ab)
+        #else:
+        self.loss_gen_adv_a = self.dis_a.calc_gen_loss(self.dis_a, x_ba)
+        self.loss_gen_adv_b = self.dis_b.calc_gen_loss(self.dis_b, x_ab)
+
         # domain-invariant perceptual loss
         self.loss_gen_vgg_a = self.compute_vgg_loss(self.vgg, x_ba, x_b) if hyperparameters['vgg_w'] > 0 else 0
         self.loss_gen_vgg_b = self.compute_vgg_loss(self.vgg, x_ab, x_a) if hyperparameters['vgg_w'] > 0 else 0
@@ -531,7 +612,9 @@ class DGNet_Trainer(nn.Module):
             self.id_opt.step()
         else:
             self.loss_gen_total.backward()
-            self.gen_opt.step()
+
+            if not self.freeze_gen_dis:
+                self.gen_opt.step()
             self.id_opt.step()
 
     def compute_vgg_loss(self, vgg, img, target):
@@ -579,12 +662,13 @@ class DGNet_Trainer(nn.Module):
     def dis_update(self, x_ab, x_ba, x_a, x_b, hyperparameters, num_gpu):
         self.dis_opt.zero_grad()
         # D loss
-        if num_gpu>1:
-            self.loss_dis_a, reg_a = self.dis_a.module.calc_dis_loss(self.dis_a, x_ba.detach(), x_a)
-            self.loss_dis_b, reg_b = self.dis_b.module.calc_dis_loss(self.dis_b, x_ab.detach(), x_b)
-        else:
-            self.loss_dis_a, reg_a = self.dis_a.calc_dis_loss(self.dis_a, x_ba.detach(), x_a)
-            self.loss_dis_b, reg_b = self.dis_b.calc_dis_loss(self.dis_b, x_ab.detach(), x_b)
+        #if num_gpu>1:
+        #    self.loss_dis_a, reg_a = self.dis_a.module.calc_dis_loss(self.dis_a, x_ba.detach(), x_a)
+        #    self.loss_dis_b, reg_b = self.dis_b.module.calc_dis_loss(self.dis_b, x_ab.detach(), x_b)
+        #else:
+        self.loss_dis_a, reg_a = self.dis_a.calc_dis_loss(self.dis_a, x_ba.detach(), x_a)
+        self.loss_dis_b, reg_b = self.dis_b.calc_dis_loss(self.dis_b, x_ab.detach(), x_b)
+
         self.loss_dis_total = hyperparameters['gan_w'] * self.loss_dis_a + hyperparameters['gan_w'] * self.loss_dis_b
         #print("DLoss: %.4f"%self.loss_dis_total, "Reg: %.4f"%(reg_a+reg_b) )
         if self.fp16:
@@ -611,13 +695,37 @@ class DGNet_Trainer(nn.Module):
             dic.pop(key)
         return dic
 
+    def addOrRemoveModule(self,net,weights):
+
+        exKeyWei = list(weights.keys())[0]
+        exKeyNet = list(net.state_dict().keys())[0]
+
+        print(exKeyWei,exKeyNet)
+
+        if exKeyWei.find("module") != -1 and exKeyNet.find("module") == -1:
+            #remove module
+            newWeights = {}
+            for param in weights:
+                newWeights[param.replace("module.","")] = weights[param]
+            weights = newWeights
+
+        if exKeyWei.find("module") == -1 and exKeyNet.find("module") != -1:
+            #add module
+            newWeights = {}
+            for param in weights:
+                newWeights["module."+param] = weights[param]
+
+            weights = newWeights
+
+        return weights
+
     def resume(self, checkpoint_dir, hyperparameters):
         # Load generators
         last_model_name = get_model_list(checkpoint_dir, "gen")
         state_dict = torch.load(last_model_name)
 
         state_dict['a'] = self.removeNonLoc(state_dict['a'])
-        self.gen_a.load_state_dict(state_dict['a'])
+        self.gen_a.load_state_dict(self.addOrRemoveModule(self.gen_a,state_dict['a']))
 
         self.gen_b = self.gen_a
         iterations = int(last_model_name[-11:-3])
@@ -626,14 +734,20 @@ class DGNet_Trainer(nn.Module):
         state_dict = torch.load(last_model_name)
 
         state_dict['a'] = self.removeNonLoc(state_dict['a'])
-        self.dis_a.load_state_dict(state_dict['a'])
+        self.dis_a.load_state_dict(self.addOrRemoveModule(self.dis_a,state_dict['a']))
         self.dis_b = self.dis_a
         # Load ID dis
         last_model_name = get_model_list(checkpoint_dir, "id")
         state_dict = torch.load(last_model_name)
         state_dict['a'] = self.removeNonLoc(state_dict['a'])
+        state_dict['a'] = self.addOrRemoveModule(self.id_a,state_dict['a'])
 
-        for classKey in ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]:
+        if list(self.id_a.state_dict().keys())[0].find("module.") != -1:
+            classKeys = ["module.classifier1.add_block.0.weight","module.classifier2.add_block.0.weight"]
+        else:
+            classKeys = ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]
+
+        for classKey in classKeys:
             if state_dict["a"][classKey].size(1) != self.id_a.state_dict()[classKey].size(1):
                 ratio = self.id_a.state_dict()[classKey].size(1) // state_dict["a"][classKey].size(1)
                 state_dict["a"][classKey] = state_dict["a"][classKey].repeat(1,ratio)/ratio
@@ -664,9 +778,10 @@ class DGNet_Trainer(nn.Module):
         id_name = os.path.join(snapshot_dir, 'id_%08d.pt' % (iterations))
         opt_name = os.path.join(snapshot_dir, 'optimizer.pt')
         torch.save({'a': self.gen_a.state_dict()}, gen_name)
-        if num_gpu>1:
-            torch.save({'a': self.dis_a.module.state_dict()}, dis_name)
-        else:
-            torch.save({'a': self.dis_a.state_dict()}, dis_name)
+        #if num_gpu>1:
+        #    torch.save({'a': self.dis_a.module.state_dict()}, dis_name)
+        #else:
+        torch.save({'a': self.dis_a.state_dict()}, dis_name)
+
         torch.save({'a': self.id_a.state_dict()}, id_name)
         torch.save({'gen': self.gen_opt.state_dict(), 'id': self.id_opt.state_dict(),  'dis': self.dis_opt.state_dict()}, opt_name)
