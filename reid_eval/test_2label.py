@@ -23,6 +23,7 @@ import scipy.io
 import yaml
 from reIDmodel import ft_net, ft_netAB, ft_net_dense, PCB, PCB_test
 import glob
+import gradcam
 ######################################################################
 # Options
 # --------
@@ -97,19 +98,49 @@ use_gpu = torch.cuda.is_available()
 ######################################################################
 # Load model
 #---------------------------
+def addOrRemoveModule(net,weights):
+
+    exKeyWei = list(weights.keys())[0]
+    exKeyNet = list(net.state_dict().keys())[0]
+
+    print(exKeyWei,exKeyNet)
+
+    if exKeyWei.find("module") != -1 and exKeyNet.find("module") == -1:
+        #remove module
+        newWeights = {}
+        for param in weights:
+            newWeights[param.replace("module.","")] = weights[param]
+        weights = newWeights
+
+    if exKeyWei.find("module") == -1 and exKeyNet.find("module") != -1:
+        #add module
+        newWeights = {}
+        for param in weights:
+            newWeights["module."+param] = weights[param]
+
+        weights = newWeights
+
+    return weights
+
 def load_network(network,save_path=None):
     if save_path is None:
         save_path = os.path.join('../outputs',name,'checkpoints/id_%08d.pt'%opt.which_epoch)
     state_dict = torch.load(save_path)
 
-    for classKey in ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]:
+    state_dict["a"] = addOrRemoveModule(network,state_dict["a"])
+
+    if list(network.state_dict().keys())[0].find("module.") != -1:
+        classKeys = ["module.classifier1.add_block.0.weight","module.classifier2.add_block.0.weight"]
+    else:
+        classKeys = ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]
+
+    for classKey in classKeys:
         if state_dict["a"][classKey].size(1) != network.state_dict()[classKey].size(1):
             ratio = network.state_dict()[classKey].size(1) // state_dict["a"][classKey].size(1)
             state_dict["a"][classKey] = state_dict["a"][classKey].repeat(1,ratio)/ratio
 
     network.load_state_dict(state_dict['a'], strict=False)
     return network
-
 
 ######################################################################
 # Extract feature
@@ -129,7 +160,7 @@ def norm(f):
     f = f.div(fnorm.expand_as(f))
     return f
 
-def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None):
+def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None,grad_cam=None):
     features = torch.FloatTensor()
     count = 0
     dataloader_nonorm = iter(dataloader_nonorm) if not dataloader_nonorm is None else dataloader_nonorm
@@ -173,6 +204,9 @@ def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None):
                     torch.save(featNorm,"../../results/{}/norm{}.pt".format(opt.exp_id,batch_idx))
                     torch.save(img_unorm,"../../results/{}/img{}.pt".format(opt.exp_id,batch_idx))
                     torch.save(ids_batch,"../../results/{}/ids{}.pt".format(opt.exp_id,batch_idx))
+
+                    allMask = grad_cam(x[0])
+                    torch.save(allMask,"../../results/{}/gradcam{}.pt".format(opt.exp_id,batch_idx))
 
                     #sys.exit(0)
 
@@ -234,6 +268,13 @@ part_nb = config["part_nb"] if "part_nb" in config else 3
 model_structure = ft_netAB(config['ID_class'], norm=config['norm_id'], stride=config['ID_stride'], pool=config['pool'],\
                                 highRes=config["high_res"],nbVec=part_nb)
 
+if opt.att_maps:
+    model_structure.layer4 = model_structure.model.layer4
+    model_dict = dict(type="resnet", arch=model_structure, layer_name='layer4')
+    grad_cam = gradcam.GradCAM(model_dict, True)
+else:
+    grad_cam = None
+
 if opt.PCB:
     model_structure = PCB(config['ID_class'])
 
@@ -256,7 +297,7 @@ if use_gpu:
 # Extract feature
 since = time.time()
 with torch.no_grad():
-    gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm)
+    gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm,grad_cam)
     query_feature = extract_feature(model,dataloaders['query'])
     time_elapsed = time.time() - since
     print('Extract features complete in {:.0f}m {:.0f}s'.format(
