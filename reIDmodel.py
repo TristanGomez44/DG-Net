@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from torch.nn import init
 from torchvision import models
+import sys
 
 ######################################################################
 def weights_init_kaiming(m):
@@ -108,7 +109,8 @@ class ft_net(nn.Module):
 # Define the AB Model
 class ft_netAB(nn.Module):
 
-    def __init__(self, class_num, norm=False, stride=2, droprate=0.5, pool='avg',repVec=True,nbVec=3,highRes=False,teach=False):
+    def __init__(self, class_num, norm=False, stride=2, droprate=0.5, pool='avg',repVec=True,nbVec=3,highRes=False,teach=False,\
+                        dilation=False):
         super(ft_netAB, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         self.part = 4
@@ -120,16 +122,28 @@ class ft_netAB(nn.Module):
             model_ft.avgpool = nn.AdaptiveAvgPool2d((1,1))
 
         self.model = model_ft
+        self.dilation = dilation
 
         if highRes:
-            self.model.layer2[0].downsample[0].stride = (1,1)
-            self.model.layer2[0].conv2.stride = (1,1)
+            self.model.layer2[0].downsample[0].stride = 1
+            self.model.layer2[0].conv2.stride = 1
 
-            self.model.layer3[0].downsample[0].stride = (1,1)
-            self.model.layer3[0].conv2.stride = (1,1)
+            self.model.layer3[0].downsample[0].stride = 1
+            self.model.layer3[0].conv2.stride = 1
 
-            self.model.layer4[0].downsample[0].stride = (1,1)
-            self.model.layer4[0].conv2.stride = (1,1)
+            self.model.layer4[0].downsample[0].stride = 1
+            self.model.layer4[0].conv2.stride = 1
+
+            if dilation:
+
+                self.model.layer2[0].conv2.dilation = 2
+                self.model.layer2[0].conv2.padding = 2
+
+                self.model.layer3[0].conv2.dilation = 2
+                self.model.layer3[0].conv2.padding = 2
+
+                self.model.layer4[0].conv2.dilation = 2
+                self.model.layer4[0].conv2.padding = 2
 
         elif stride == 1:
             self.model.layer4[0].downsample[0].stride = (1,1)
