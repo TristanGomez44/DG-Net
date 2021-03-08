@@ -4,7 +4,7 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 """
 from utils import get_all_data_loaders, prepare_sub_folder, write_loss, get_config, write_2images, Timer
 import argparse
-from trainer import DGNet_Trainer
+from trainer import DGNet_Trainer,Updater
 import torch.backends.cudnn as cudnn
 import torch
 import numpy.random as random
@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
     # Setup model and data loader
     if opts.trainer == 'DGNet':
-        trainer = DGNet_Trainer(config)
+        trainer = DGNet_Trainer(config,gpu_ids)
         trainer.cuda()
 
     random.seed(7) #fix random result
@@ -83,65 +83,73 @@ if __name__ == "__main__":
     config['epoch_iteration'] = round( train_loader_a.dataset.img_num  / config['batch_size'] )
     nepoch = 0
 
-    if num_gpu>1:
-        trainer.dis_a = torch.nn.DataParallel(trainer.dis_a)
-        trainer.dis_b = trainer.dis_a
-        trainer = torch.nn.DataParallel(trainer)
+    #if num_gpu>1:
+        #trainer.dis_a = torch.nn.DataParallel(trainer.dis_a)
+        #trainer.dis_b = trainer.dis_a
+        #trainer = torch.nn.DataParallel(trainer)
+        #updater = Updater(trainer,config["freeze_gen_dis"],num_gpu)
 
     while iterations < max_iter:
         for it, ((images_a,labels_a, pos_a),  (images_b, labels_b, pos_b)) in enumerate(zip(train_loader_a, train_loader_b)):
-            if num_gpu>1:
-                trainer.module.update_learning_rate()
-            else:
-                trainer.update_learning_rate()
+            #if num_gpu>1:
+            #    trainer.module.update_learning_rate()
+            #else:
+            trainer.update_learning_rate()
+
             images_a, images_b = images_a.cuda().detach(), images_b.cuda().detach()
             pos_a, pos_b = pos_a.cuda().detach(), pos_b.cuda().detach()
             labels_a, labels_b = labels_a.cuda().detach(), labels_b.cuda().detach()
 
             # Main training code
             x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p = \
-                                                                                  trainer(images_a, images_b, pos_a, pos_b)
-            if num_gpu>1:
-                trainer.module.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu)
-                trainer.module.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu)
-            else:
-                trainer.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu=1)
-                trainer.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu=1)
+                                                                                  trainer(images_a, images_b, pos_a, pos_b,labels_a, labels_b,iterations,config,num_gpu)
+            #if num_gpu>1:
+            #    if not config["freeze_gen_dis"]:
+            #        trainer.module.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu)
+            #    trainer.module.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu)
+            #else:
+            #    if not config["freeze_gen_dis"]:
+            #        trainer.dis_update(x_ab.clone(), x_ba.clone(), images_a, images_b, config, num_gpu=1)
+            #    trainer.gen_update(x_ab, x_ba, s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p, x_b_recon_p, images_a, images_b, pos_a, pos_b, labels_a, labels_b, config, iterations, num_gpu=1)
+
+            #updater(x_ab, x_ba, images_a, images_b, config,\
+            #                s_a, s_b, f_a, f_b, p_a, p_b, pp_a, pp_b, x_a_recon, x_b_recon, x_a_recon_p,\
+            #                x_b_recon_p, pos_a, pos_b, labels_a, labels_b, iterations)
 
             torch.cuda.synchronize()
 
             # Dump training stats in log file
             if (iterations + 1) % config['log_iter'] == 0:
                 print("\033[1m Epoch: %02d Iteration: %08d/%08d \033[0m" % (nepoch, iterations + 1, max_iter))
-                if num_gpu==1:
-                    write_loss(iterations, trainer, train_writer)
-                else:
-                    write_loss(iterations, trainer.module, train_writer)
+                #if num_gpu==1:
+                write_loss(iterations, trainer, train_writer)
+                #else:
+                #write_loss(iterations, trainer.module, train_writer)
 
             # Write images
-            if (iterations + 1) % config['image_save_iter'] == 0:
-                with torch.no_grad():
-                    if num_gpu>1:
-                        test_image_outputs = trainer.module.sample(test_display_images_a, test_display_images_b)
-                    else:
-                        test_image_outputs = trainer.sample(test_display_images_a, test_display_images_b)
-                write_2images(test_image_outputs, display_size, image_directory, 'test_%08d' % (iterations + 1))
-                del test_image_outputs
+            #if (iterations + 1) % config['image_save_iter'] == 0:
+            #    with torch.no_grad():
+            #        if num_gpu>1:
+            #            test_image_outputs = trainer.module.sample(test_display_images_a, test_display_images_b)
+            #        else:
+            #            test_image_outputs = trainer.sample(test_display_images_a, test_display_images_b)
+            #    write_2images(test_image_outputs, display_size, image_directory, 'test_%08d' % (iterations + 1))
+            #    del test_image_outputs
 
-            if (iterations + 1) % config['image_display_iter'] == 0:
-                with torch.no_grad():
-                    if num_gpu>1:
-                        image_outputs = trainer.module.sample(train_display_images_a, train_display_images_b)
-                    else:
-                        image_outputs = trainer.sample(train_display_images_a, train_display_images_b)
-                write_2images(image_outputs, display_size, image_directory, 'train_%08d' % (iterations + 1))
-                del image_outputs
+            #if (iterations + 1) % config['image_display_iter'] == 0:
+            #    with torch.no_grad():
+            #        if num_gpu>1:
+            #            image_outputs = trainer.module.sample(train_display_images_a, train_display_images_b)
+            #        else:
+            #            image_outputs = trainer.sample(train_display_images_a, train_display_images_b)
+            #    write_2images(image_outputs, display_size, image_directory, 'train_%08d' % (iterations + 1))
+            #    del image_outputs
             # Save network weights
-            if (iterations + 1) % config['snapshot_save_iter'] == 0:
-                if num_gpu>1:
-                    trainer.module.save(checkpoint_directory, iterations)
-                else:
-                    trainer.save(checkpoint_directory, iterations)
+            #if (iterations + 1) % config['snapshot_save_iter'] == 0:
+            #    if num_gpu>1:
+            #        trainer.module.save(checkpoint_directory, iterations)
+            #    else:
+            #        trainer.save(checkpoint_directory, iterations)
 
             iterations += 1
 
@@ -151,13 +159,13 @@ if __name__ == "__main__":
         # Save network weights by epoch number
         nepoch = nepoch+1
         if(nepoch + 1) % 10 == 0:
-            if num_gpu>1:
-                trainer.module.save(checkpoint_directory, iterations)
-            else:
-                trainer.save(checkpoint_directory, iterations)
+            #if num_gpu>1:
+            #    trainer.module.save(checkpoint_directory, iterations)
+            #else:
+            trainer.save(checkpoint_directory, iterations)
 
     print("Finished training")
-    if num_gpu>1:
-        trainer.module.save(checkpoint_directory, iterations)
-    else:
-        trainer.save(checkpoint_directory, iterations)
+    #if num_gpu>1:
+    #    trainer.module.save(checkpoint_directory, iterations)
+    #else:
+    trainer.save(checkpoint_directory, iterations)
