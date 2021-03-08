@@ -12,12 +12,24 @@ import glob
 import torch
 import sys
 
+def str2bool(v):
+    """ Usage:
+    parser.add_argument('--pretrained', type=str2bool, nargs='?', const=True,
+                        dest='pretrained', help='Whether to use pretrained models.')
+    """
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Unsupported value encountered.')
+
 def run(config,trial):
 
     config["lr2"] = trial.suggest_float("lr2",0.0001,0.0061,step=0.001)
     config["lr_d"] = trial.suggest_float("lr_d",0.00001,0.00041,step=0.00005)
     config["lr_g"] = trial.suggest_float("lr_g",0.00001,0.00041,step=0.00005)
-    config["batch_size"] = trial.suggest_int("batch_size",1,config["max_batch_size"],log=True)
+    config["batch_size"] = trial.suggest_int("batch_size",2*torch.cuda.device_count(),config["max_batch_size"],log=True)
     config["weight_decay"] = trial.suggest_float("weight_decay",0.0001,0.002,step=0.0001)
     config["erasing_p"] = trial.suggest_float("erasing_p",0.4,0.6,step=0.1)
     config["gan_w"] = trial.suggest_float("gan_w",0.8,1.2,step=0.2)
@@ -26,10 +38,9 @@ def run(config,trial):
     config["recon_id_w"] = trial.suggest_float("recon_id_w",0.1,1.0,step=0.1)
     config["recon_x_w"] = trial.suggest_float("recon_x_w",1,10,step=1)
     config["recon_xp_w"] = trial.suggest_float("recon_xp_w",1,10,step=1)
-    config["teacher_w"] = trial.suggest_float("recon_id_w",0,1.5,step=0.25)
-    
-    epochLen = trial.suggest_int("epochLen",1017,2217,step=100)
+    config["teacher_w"] = trial.suggest_float("teacher_w",0,1.5,step=0.25)
 
+    epochLen = trial.suggest_int("epochLen",1017,2217,step=100)
 
     if not config["distill"]:
         config["part_nb"]= trial.suggest_int("part_nb",3,15,step=2)
@@ -37,7 +48,7 @@ def run(config,trial):
         config["part_nb"] = 3
         bestTrial = getBestTrial(config["exp_id"],config["distill"])
 
-        teachConf = get_config("outputs/E0.5new_reid0.5_w30000/config_model{}_trial{}.yaml".format(config["distill"],bestTrial))
+        teachConf = get_config("outputs/E0.5new_reid0.5_w30000/config_model{}_trial{}.yaml".format(config["distill"],bestTrial-1))
         if not "part_nb" in teachConf:
             config["part_nb_teacher"] = 3
         else:
@@ -117,9 +128,11 @@ if __name__ == "__main__":
     parser.add_argument('--exp_id', type=str, default='market', help="exp id")
     parser.add_argument('--max_batch_size', type=int, default=8)
     parser.add_argument('--optuna_trial_nb', type=int, default=50)
-    parser.add_argument('--epochs', type=int, default=4)
+    parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--distill', type=str,help="model_id of the model to distill")
     parser.add_argument('--part_nb', type=int,help="Number of attention maps",default=3)
+    parser.add_argument('--freeze_gen_dis', type=str2bool,help="To freeze the generator and the discriminator",default=False)
+    parser.add_argument('--dilation', type=str2bool,help="To dilate the convolution kernel",default=False)
 
     opts = parser.parse_args()
 
@@ -151,6 +164,8 @@ if __name__ == "__main__":
     config["distill"] = opts.distill
     config["optuna_trial_nb"] = opts.optuna_trial_nb
     config["gpu_ids"] = opts.gpu_ids
+    config["freeze_gen_dis"] = opts.freeze_gen_dis
+    config["dilation"] =  opts.dilation
 
     def objective(trial):
         return run(config,trial=trial)
