@@ -76,7 +76,7 @@ class GradCAM(object):
         """
         b, c, h, w = input.size()
 
-        if logits is None
+        if logits is None:
             logits = self.model_arch(input)[1][0]
 
         allMaps = []
@@ -109,8 +109,8 @@ class GradCAM(object):
         saliency_map = torch.cat(allMaps,dim=0)
         return saliency_map
 
-    def __call__(self, input, class_idx=None, retain_graph=False):
-        return self.forward(input, class_idx, retain_graph)
+    def __call__(self, input, class_idx=None, retain_graph=False,**kwargs):
+        return self.forward(input, class_idx=class_idx, retain_graph=retain_graph,**kwargs)
 
 
 class GradCAMpp(GradCAM):

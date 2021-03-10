@@ -38,6 +38,7 @@ parser.add_argument('--use_dense', action='store_true', help='use densenet121' )
 parser.add_argument('--PCB', action='store_true', help='use PCB' )
 parser.add_argument('--multi', action='store_true', help='use multiple query' )
 parser.add_argument('--att_maps', action='store_true', help='to save att maps')
+parser.add_argument('--gradcam', action='store_true', help='to compute gradcam')
 parser.add_argument('--exp_id', type=str)
 parser.add_argument('--model_id', type=str)
 parser.add_argument('--which_trial',type=int)
@@ -181,7 +182,8 @@ def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None,gra
                 img = fliplr(img)
             input_img = Variable(img.cuda())
 
-            ret = model(input_img,retSim=opt.att_maps)
+            with torch.no_grad():
+                ret = model(input_img,retSim=opt.att_maps)
             f, x = ret[:2]
 
             if opt.att_maps and writeMaps:
@@ -200,15 +202,15 @@ def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None,gra
                     featNorm = featNorm[inds]
                     img_unorm = img_unorm[inds]
 
-                    torch.save(simMaps,"../../results/{}/simMaps{}.pt".format(opt.exp_id,batch_idx))
-                    torch.save(featNorm,"../../results/{}/norm{}.pt".format(opt.exp_id,batch_idx))
-                    torch.save(img_unorm,"../../results/{}/img{}.pt".format(opt.exp_id,batch_idx))
-                    torch.save(ids_batch,"../../results/{}/ids{}.pt".format(opt.exp_id,batch_idx))
+                    torch.save(simMaps,"../../results/{}/simMaps{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
+                    torch.save(featNorm,"../../results/{}/norm{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
+                    torch.save(img_unorm,"../../results/{}/img{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
+                    torch.save(ids_batch,"../../results/{}/ids{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
 
-                    allMask = grad_cam(x[0])
-                    torch.save(allMask,"../../results/{}/gradcam{}.pt".format(opt.exp_id,batch_idx))
-
-                    #sys.exit(0)
+                    if not grad_cam is None:
+                        allMask = grad_cam(input_img)
+                        grad_cam.model_arch.zero_grad()
+                        torch.save(allMask,"../../results/{}/gradcam{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
 
             x[0] = norm(x[0])
             x[1] = norm(x[1])
@@ -268,7 +270,7 @@ part_nb = config["part_nb"] if "part_nb" in config else 3
 model_structure = ft_netAB(config['ID_class'], norm=config['norm_id'], stride=config['ID_stride'], pool=config['pool'],\
                                 highRes=config["high_res"],nbVec=part_nb)
 
-if opt.att_maps:
+if opt.gradcam:
     model_structure.layer4 = model_structure.model.layer4
     model_dict = dict(type="resnet", arch=model_structure, layer_name='layer4')
     grad_cam = gradcam.GradCAM(model_dict, True)
@@ -296,8 +298,14 @@ if use_gpu:
 
 # Extract feature
 since = time.time()
-with torch.no_grad():
+
+if not opt.gradcam:
+    with torch.no_grad():
+        gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm,grad_cam)
+else:
     gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm,grad_cam)
+
+with torch.no_grad():
     query_feature = extract_feature(model,dataloaders['query'])
     time_elapsed = time.time() - since
     print('Extract features complete in {:.0f}m {:.0f}s'.format(
