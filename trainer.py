@@ -224,7 +224,7 @@ class DGNet_Trainer(nn.Module):
         elif hyperparameters['ID_style']=='AB':
             self.id_a = ft_netAB(ID_class, stride = hyperparameters['ID_stride'], norm=hyperparameters['norm_id'], \
                                     pool=hyperparameters['pool'],nbVec=hyperparameters["part_nb"],highRes=hyperparameters["high_res"],\
-                                    dilation=hyperparameters["dilation"])
+                                    dilation=hyperparameters["dilation"],b_cnn=hyperparameters["b_cnn"],mergevec=hyperparameters["mergevec"])
         else:
             self.id_a = ft_net(ID_class, norm=hyperparameters['norm_id'], pool=hyperparameters['pool']) # return 2048 now
         self.id_a = DataParallelModel(self.id_a) if len(gpu_ids) > 1 else self.id_a
@@ -742,17 +742,44 @@ class DGNet_Trainer(nn.Module):
         state_dict['a'] = self.removeNonLoc(state_dict['a'])
         state_dict['a'] = self.addOrRemoveModule(self.id_a,state_dict['a'])
 
-        if list(self.id_a.state_dict().keys())[0].find("module.") != -1:
-            classKeys = ["module.classifier1.add_block.0.weight","module.classifier2.add_block.0.weight"]
+        if not hyperparameters["mergevec"]:
+            if list(self.id_a.state_dict().keys())[0].find("module.") != -1:
+                classKeys = ["module.classifier1.add_block.0.weight","module.classifier2.add_block.0.weight"]
+            else:
+                classKeys = ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]
+
+            for classKey in classKeys:
+                if state_dict["a"][classKey].size(1) != self.id_a.state_dict()[classKey].size(1):
+                    ratio = self.id_a.state_dict()[classKey].size(1) // state_dict["a"][classKey].size(1)
+                    state_dict["a"][classKey] = state_dict["a"][classKey].repeat(1,ratio)/ratio
         else:
-            classKeys = ["classifier1.add_block.0.weight","classifier2.add_block.0.weight"]
+            classKeys = []
+            for key in state_dict["a"].keys():
+                if key.find("classifier1") != -1 or key.find("classifier2") != -1:
+                    classKeys.append(key)
+            for key in classKeys:
+                state_dict["a"].pop(key)
 
-        for classKey in classKeys:
-            if state_dict["a"][classKey].size(1) != self.id_a.state_dict()[classKey].size(1):
-                ratio = self.id_a.state_dict()[classKey].size(1) // state_dict["a"][classKey].size(1)
-                state_dict["a"][classKey] = state_dict["a"][classKey].repeat(1,ratio)/ratio
+        miss,unexp = self.id_a.load_state_dict(state_dict['a'],strict=False)
 
-        self.id_a.load_state_dict(state_dict['a'])
+        missKeys = []
+        expToMissKeys = []
+        for key in sorted(miss):
+            if key.find(".att.") == -1 and key.find("vec") == -1:
+                if (not hyperparameters["mergevec"]) or (hyperparameters["mergevec"] and key.find("classifier") == -1):
+                    missKeys.append(key)
+                else:
+                    expToMissKeys.append(key)
+            else:
+                expToMissKeys.append(key)
+        print("Missing {} but it is expected".format(expToMissKeys))
+
+        if len(missKeys) > 0:
+            raise ValueError("Missing keys",missKeys)
+
+        if len(unexp) > 0:
+            raise ValueError("Unexpected keys",unexp)
+
         self.id_b = self.id_a
         # Load optimizers
         try:
