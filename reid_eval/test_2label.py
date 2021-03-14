@@ -24,6 +24,7 @@ import yaml
 from reIDmodel import ft_net, ft_netAB, ft_net_dense, PCB, PCB_test
 import glob
 import gradcam
+import guided_backprop
 ######################################################################
 # Options
 # --------
@@ -42,6 +43,7 @@ parser.add_argument('--gradcam', action='store_true', help='to compute gradcam')
 parser.add_argument('--exp_id', type=str)
 parser.add_argument('--model_id', type=str)
 parser.add_argument('--which_trial',type=int)
+parser.add_argument('--batch_inds', type=int,nargs="*",help="The batch index to save the maps of.")
 
 opt = parser.parse_args()
 
@@ -161,13 +163,15 @@ def norm(f):
     f = f.div(fnorm.expand_as(f))
     return f
 
-def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None,grad_cam=None):
+def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None,grad_cam=None,grad_cam_pp=None,guided_backprop_mod=None,batch_inds=None):
     features = torch.FloatTensor()
     count = 0
     dataloader_nonorm = iter(dataloader_nonorm) if not dataloader_nonorm is None else dataloader_nonorm
     ids = get_id(image_datasets['gallery'].imgs)[1]
 
+
     for batch_idx,data in enumerate(dataloaders):
+
         img, label = data
         n, c, h, w = img.size()
         count += n
@@ -191,7 +195,7 @@ def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None,gra
                 if i == 0:
                     img_unorm,_ = dataloader_nonorm.next()
 
-                if batch_idx%5 == 0 and i ==0:
+                if batch_idx%5 == 0 and i ==0 and (batch_inds is None or batch_idx in batch_inds):
                     #img_unorm,_ = dataloader_nonorm.next()
 
                     _,inds = torch.tensor(ids[batch_idx*n:(batch_idx+1)*n]).sort()
@@ -208,9 +212,30 @@ def extract_feature(model,dataloaders,writeMaps=False,dataloader_nonorm=None,gra
                     torch.save(ids_batch,"../../results/{}/ids{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
 
                     if not grad_cam is None:
-                        allMask = grad_cam(input_img)
-                        grad_cam.model_arch.zero_grad()
-                        torch.save(allMask,"../../results/{}/gradcam{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
+                        #allMask = []
+                        #allMask_pp = []
+                        allMap = []
+
+                        for l in range(len(input_img)):
+                            #mask = grad_cam(input_img[l:l+1])
+                            #allMask.append(mask)
+
+                            #mask_pp = grad_cam_pp(input_img[l:l+1])
+                            #allMask_pp.append(mask_pp)
+
+                            map = guided_backprop_mod.generate_gradients(input_img[l:l+1])
+                            allMap.append(map)
+
+                            grad_cam_pp.model_arch.zero_grad()
+
+                        #allMask = torch.cat(allMask,dim=0)
+                        #allMask_pp = torch.cat(allMask_pp,dim=0)
+                        allMap = torch.cat(allMap,dim=0)
+
+                        print("Writing {}",batch_idx)
+                        #torch.save(allMask,"../../results/{}/gradcam{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
+                        #torch.save(allMask_pp,"../../results/{}/gradcam_pp{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
+                        torch.save(allMap,"../../results/{}/guidedback{}_model{}_trial{}.pt".format(opt.exp_id,batch_idx,opt.model_id,opt.which_trial))
 
             x[0] = norm(x[0])
             x[1] = norm(x[1])
@@ -271,16 +296,22 @@ model_structure = ft_netAB(config['ID_class'], norm=config['norm_id'], stride=co
                                 highRes=config["high_res"],nbVec=part_nb)
 
 if opt.gradcam:
+    model_structure.features = model_structure.model
     model_structure.layer4 = model_structure.model.layer4
     model_dict = dict(type="resnet", arch=model_structure, layer_name='layer4')
     grad_cam = gradcam.GradCAM(model_dict, True)
+    grad_cam_pp = gradcam.GradCAMpp(model_dict,True)
+    guided_backprop_mod = guided_backprop.GuidedBackprop(model_structure)
 else:
     grad_cam = None
+    grad_cam_pp = None
+    guided_backprop_mod = None
 
 if opt.PCB:
     model_structure = PCB(config['ID_class'])
 
 if opt.att_maps:
+    print("../../models/{}/id_[0-9]*{}model{}_trial{}_best.pt".format(opt.exp_id,opt.which_epoch,opt.model_id,opt.which_trial))
     save_path = glob.glob("../../models/{}/id_[0-9]*{}model{}_trial{}_best.pt".format(opt.exp_id,opt.which_epoch,opt.model_id,opt.which_trial))[0]
 else:
     save_path = None
@@ -301,9 +332,9 @@ since = time.time()
 
 if not opt.gradcam:
     with torch.no_grad():
-        gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm,grad_cam)
+        gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm,grad_cam,grad_cam_pp,guided_backprop_mod,opt.batch_inds)
 else:
-    gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm,grad_cam)
+    gallery_feature = extract_feature(model,dataloaders['gallery'],True,dataloader_nonorm,grad_cam,grad_cam_pp,guided_backprop_mod,opt.batch_inds)
 
 with torch.no_grad():
     query_feature = extract_feature(model,dataloaders['query'])

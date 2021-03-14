@@ -63,8 +63,7 @@ class GradCAM(object):
                 self.model_arch(torch.zeros(1, 3, *(input_size), device=device))
                 print('saliency_map size :', self.activations['value'].shape[2:])
 
-
-    def forward(self, input=None,logits=None, class_idx=None, retain_graph=False):
+    def forward(self, input=None, class_idx=None, retain_graph=False):
         """
         Args:
             input: input image with shape of (1, 3, H, W)
@@ -76,37 +75,29 @@ class GradCAM(object):
         """
         b, c, h, w = input.size()
 
-        if logits is None:
-            logits = self.model_arch(input)[1][0]
+        logit = self.model_arch(input)[1][0]
 
-        allMaps = []
-        for i in range(len(logits)):
+        if class_idx is None:
+            score = logit[:, logit.max(1)[-1]].squeeze()
+        else:
+            score = logit[:, class_idx].squeeze()
 
-            logit = logits[i:i+1]
+        self.model_arch.zero_grad()
+        score.backward(retain_graph=True)
+        gradients = self.gradients['value']
+        activations = self.activations['value']
+        b, k, u, v = gradients.size()
 
-            if class_idx is None:
-                score = logit[:, logit.max(1)[-1]].squeeze()
-            else:
-                score = logit[:, class_idx].squeeze()
+        alpha = gradients.view(b, k, -1).mean(2)
+        #alpha = F.relu(gradients.view(b, k, -1)).mean(2)
+        weights = alpha.view(b, k, 1, 1)
 
-            self.model_arch.zero_grad()
-            score.backward(retain_graph=True)
-            gradients = self.gradients['value']
-            activations = self.activations['value']
-            b, k, u, v = gradients.size()
+        saliency_map = (weights*activations).sum(1, keepdim=True)
+        saliency_map = F.relu(saliency_map)
+        saliency_map = F.upsample(saliency_map, size=(h, w), mode='bilinear', align_corners=False)
+        saliency_map_min, saliency_map_max = saliency_map.min(), saliency_map.max()
+        saliency_map = (saliency_map - saliency_map_min).div(saliency_map_max - saliency_map_min).data
 
-            alpha = gradients.view(b, k, -1).mean(2)
-            #alpha = F.relu(gradients.view(b, k, -1)).mean(2)
-            weights = alpha.view(b, k, 1, 1)
-
-            saliency_map = (weights*activations).sum(1, keepdim=True)
-            saliency_map = F.relu(saliency_map)
-            saliency_map = F.upsample(saliency_map, size=(h, w), mode='bilinear', align_corners=False)
-            saliency_map_min, saliency_map_max = saliency_map.min(), saliency_map.max()
-            saliency_map = (saliency_map - saliency_map_min).div(saliency_map_max - saliency_map_min).data
-            allMaps.append(saliency_map)
-
-        saliency_map = torch.cat(allMaps,dim=0)
         return saliency_map
 
     def __call__(self, input, class_idx=None, retain_graph=False,**kwargs):
@@ -147,39 +138,32 @@ class GradCAMpp(GradCAM):
         """
         b, c, h, w = input.size()
 
-        logits = self.model_arch(input)
-        allMaps = []
+        logit = self.model_arch(input)[1][0]
 
-        for i in range(len(logits)):
-            logit = logits[i:i+1]
+        if class_idx is None:
+            score = logit[:, logit.max(1)[-1]].squeeze()
+        else:
+            score = logit[:, class_idx].squeeze()
 
-            if class_idx is None:
-                score = logit[:, logit.max(1)[-1]].squeeze()
-            else:
-                score = logit[:, class_idx].squeeze()
+        self.model_arch.zero_grad()
+        score.backward(retain_graph=True)
+        gradients = self.gradients['value'] # dS/dA
+        activations = self.activations['value'] # A
+        b, k, u, v = gradients.size()
 
-            self.model_arch.zero_grad()
-            score.backward(retain_graph=True)
-            gradients = self.gradients['value'] # dS/dA
-            activations = self.activations['value'] # A
-            b, k, u, v = gradients.size()
+        alpha_num = gradients.pow(2)
+        alpha_denom = gradients.pow(2).mul(2) + \
+                activations.mul(gradients.pow(3)).view(b, k, u*v).sum(-1, keepdim=True).view(b, k, 1, 1)
+        alpha_denom = torch.where(alpha_denom != 0.0, alpha_denom, torch.ones_like(alpha_denom))
 
-            alpha_num = gradients.pow(2)
-            alpha_denom = gradients.pow(2).mul(2) + \
-                    activations.mul(gradients.pow(3)).view(b, k, u*v).sum(-1, keepdim=True).view(b, k, 1, 1)
-            alpha_denom = torch.where(alpha_denom != 0.0, alpha_denom, torch.ones_like(alpha_denom))
+        alpha = alpha_num.div(alpha_denom+1e-7)
+        positive_gradients = F.relu(score.exp()*gradients) # ReLU(dY/dA) == ReLU(exp(S)*dS/dA))
+        weights = (alpha*positive_gradients).view(b, k, u*v).sum(-1).view(b, k, 1, 1)
 
-            alpha = alpha_num.div(alpha_denom+1e-7)
-            positive_gradients = F.relu(score.exp()*gradients) # ReLU(dY/dA) == ReLU(exp(S)*dS/dA))
-            weights = (alpha*positive_gradients).view(b, k, u*v).sum(-1).view(b, k, 1, 1)
-
-            saliency_map = (weights*activations).sum(1, keepdim=True)
-            saliency_map = F.relu(saliency_map)
-            saliency_map = F.upsample(saliency_map, size=(224, 224), mode='bilinear', align_corners=False)
-            saliency_map_min, saliency_map_max = saliency_map.min(), saliency_map.max()
-            saliency_map = (saliency_map-saliency_map_min).div(saliency_map_max-saliency_map_min).data
-            allMaps.append(saliency_map)
-
-        saliency_map = torch.cat(allMaps,dim=1)
+        saliency_map = (weights*activations).sum(1, keepdim=True)
+        saliency_map = F.relu(saliency_map)
+        saliency_map = F.upsample(saliency_map, size=(224, 224), mode='bilinear', align_corners=False)
+        saliency_map_min, saliency_map_max = saliency_map.min(), saliency_map.max()
+        saliency_map = (saliency_map-saliency_map_min).div(saliency_map_max-saliency_map_min).data
 
         return saliency_map
