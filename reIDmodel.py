@@ -106,11 +106,56 @@ class ft_net(nn.Module):
         x = self.classifier(x)
         return f, x
 
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None):
+        super(BasicBlock, self).__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        # Both self.conv1 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv3x3(inplanes, planes, stride)
+
+        self.bn1 = norm_layer(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.conv2 = conv3x3(planes, planes)
+
+        self.bn2 = norm_layer(planes)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, inp):
+
+        x = inp
+
+        identity = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        out += identity
+
+        out = self.relu(out)
+
+        return out
+
+def conv3x3(in_planes, out_planes, stride=1):
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,padding=1, bias=False)
+
+def conv1x1(in_planes, out_planes, stride=1,groups=1):
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False,groups=groups)
+
 # Define the AB Model
 class ft_netAB(nn.Module):
 
     def __init__(self, class_num, norm=False, stride=2, droprate=0.5, pool='avg',repVec=True,nbVec=3,highRes=False,teach=False,\
-                        dilation=False):
+                        dilation=False,b_cnn=False,mergevec=False):
         super(ft_netAB, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         self.part = 4
@@ -151,8 +196,9 @@ class ft_netAB(nn.Module):
 
         self.repVec = repVec
         self.nbVec = nbVec
+        self.b_cnn = b_cnn
 
-        if not repVec:
+        if (not repVec) or mergevec:
             self.classifier1 = ClassBlock(2048, class_num, 0.5)
             self.classifier2 = ClassBlock(2048, class_num, 0.75)
         else:
@@ -160,7 +206,35 @@ class ft_netAB(nn.Module):
             self.classifier1 = ClassBlock(2048*nbVec, class_num, 0.5)
             self.classifier2 = ClassBlock(2048*nbVec, class_num, 0.75)
 
+            if self.b_cnn:
+                attention = [BasicBlock(2048, 2048)]
+                attention.append(conv1x1(2048, nbVec))
+                attention.append(nn.ReLU())
+                self.att = nn.Sequential(*attention)
+
         self.teach = teach
+        self.mergevec = mergevec
+        if self.mergevec:
+            half = nn.Linear(2048,2048//2)
+            quarter = nn.Linear(2048,2048//4)
+            self.vec1 = half
+            self.vec2 = quarter
+            self.vec3 = quarter
+
+    def compAtt(self,x):
+        attMaps = self.att(x)
+        x = (attMaps.unsqueeze(2)*x.unsqueeze(1)).reshape(x.size(0),x.size(1)*(attMaps.size(1)),x.size(2),x.size(3))
+        x = self.model.avgpool(x)
+        return x.view(x.size(0), -1),[attMaps[:,i:i+1] for i in range(attMaps.size(1))]
+
+    def mergeVec(self,x):
+        finalVec = []
+        for k,vec in enumerate(x):
+            lin = getattr(self,"vec{}".format(k+1))
+            outVec = lin(vec)
+            finalVec.append(outVec)
+        x = torch.cat(finalVec,dim=-1)
+        return x
 
     def forward(self, x,retSim=False):
         x = self.model.conv1(x)
@@ -181,8 +255,16 @@ class ft_netAB(nn.Module):
         else:
             if retSim:
                 norm = torch.sqrt(torch.pow(x,2).sum(dim=1,keepdim=True))
-            x,simMaps = representativeVectors(x,self.nbVec)
-            x = torch.cat(x,dim=1)
+
+            if self.b_cnn:
+                x,simMaps = self.compAtt(x)
+            else:
+                x,simMaps = representativeVectors(x,self.nbVec)
+
+                if self.mergevec:
+                    x = self.mergeVec(x)
+                else:
+                    x = torch.cat(x,dim=1)
 
         x = x.view(x.size(0), x.size(1))
         x1 = self.classifier1(x)
